@@ -1,12 +1,12 @@
 ---
-- name: Set and lock GNOME wallpaper system-wide (Hardened for AWX demo)
+- name: Set and lock GNOME wallpaper system-wide (AWX Demo Ready)
   hosts: all
   become: yes
   gather_facts: yes
-  ignore_unreachable: yes 
+  ignore_unreachable: yes   # Do not fail run if some hosts are unreachable
 
   vars:
-    wallpaper_source: "files/custom_wallpaper.jpg"       # path inside the AWX project
+    wallpaper_source: "files/custom_wallpaper.jpg"       # Relative to project root
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
     dconf_dir: "/etc/dconf/db/local.d"
     dconf_file: "00-wallpaper"
@@ -15,14 +15,14 @@
   pre_tasks:
     - name: Ensure wallpaper file exists in project
       ansible.builtin.stat:
-        path: "{{ playbook_dir | default('.') }}/{{ wallpaper_source }}"
+        path: "{{ wallpaper_source }}"
       register: wallpaper_stat
 
     - name: Fail early if wallpaper file missing
       ansible.builtin.fail:
         msg: >
-          Wallpaper file {{ wallpaper_source }} not found in project. Make sure it is present
-          under the project 'files/' folder in AWX.
+          Wallpaper file {{ wallpaper_source }} not found in project.
+          Make sure it is present under the project 'files/' folder in AWX.
       when: not wallpaper_stat.stat.exists
 
     - name: Check if 'dconf' binary is present
@@ -39,7 +39,6 @@
       when:
         - dconf_bin.rc != 0
         - ansible_facts['os_family'] == 'Debian'
-      become: yes
 
   tasks:
     - name: Ensure dconf config directory exists
@@ -47,14 +46,12 @@
         path: "{{ dconf_dir }}"
         state: directory
         mode: '0755'
-      become: yes
 
     - name: Ensure dconf lock directory exists
       ansible.builtin.file:
         path: "{{ dconf_lock_dir }}"
         state: directory
         mode: '0755'
-      become: yes
 
     - name: Copy wallpaper to system directory
       ansible.builtin.copy:
@@ -63,7 +60,6 @@
         owner: root
         group: root
         mode: '0644'
-      become: yes
 
     - name: Create GNOME system-wide wallpaper config
       ansible.builtin.copy:
@@ -75,7 +71,6 @@
         owner: root
         group: root
         mode: '0644'
-      become: yes
 
     - name: Create GNOME wallpaper lock file
       ansible.builtin.copy:
@@ -86,11 +81,9 @@
         owner: root
         group: root
         mode: '0444'
-      become: yes
 
     - name: Update dconf database
       ansible.builtin.shell: dconf update
-      become: yes
       args:
         warn: false
 
@@ -99,6 +92,3 @@
         msg: >
           Wallpaper has been set to {{ wallpaper_dest }} and locked system-wide.
           Changes will apply automatically at next GNOME login for all users.
-
-  # optional: do not fail entire run because some hosts unreachable (AWX still records unreachable)
-  # You can also set max_fail_percentage in job template if desired.
