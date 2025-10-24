@@ -1,0 +1,16 @@
+ansible all -m ping -i hosts
+dry ping
+
+
+ansible all -m setup -i hosts
+Collects system info like OS, IP, memory, etc.
+
+
+ansible-playbook playbook.yml -i hosts
+
+ansible-playbook -i hosts set_wallpaper2.yml --ask-become-pass
+
+ansible -i hosts all -m ping --ask-become-pass
+
+ansible all -m setup -i hosts --ask-become-pass
+

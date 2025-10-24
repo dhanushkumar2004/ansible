@@ -1,0 +1,88 @@
+---
+- name: Set and lock wallpaper on single-user Ubuntu system
+  hosts: ubuntu_nodes
+  become: yes
+
+  vars:
+    wallpaper_path: /usr/share/backgrounds/company_wallpaper.png
+    # user_name: testuser2
+
+  tasks:
+    # Step 1: Copy wallpaper file to system folder
+    - name: Copy wallpaper to system folder
+      ansible.builtin.copy:
+        src: wallpaper.jpg
+        dest: "{{ wallpaper_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Step 2: Apply wallpaper for the target user
+    - name: Apply wallpaper for the single user
+      become_user: "{{ ansible_user }}"
+      ansible.builtin.shell: >
+        gsettings set org.gnome.desktop.background picture-uri 'file://{{ wallpaper_path }}' &&
+        gsettings set org.gnome.desktop.background picture-options 'zoom'
+      environment:
+        DISPLAY: ":0"
+        XAUTHORITY: "/home/{{ ansible_user }}/.Xauthority"
+
+    # Step 3: Ensure required dconf directories exist
+    - name: Ensure dconf directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/dconf/db/local.d
+        - /etc/dconf/db/local.d/locks
+        - /etc/dconf/profile
+
+    # Step 4: Ensure dconf profile uses system database
+    - name: Ensure dconf profile uses system database
+      ansible.builtin.copy:
+        dest: /etc/dconf/profile/user
+        content: |
+          user-db:user
+          system-db:local
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Step 5: Create wallpaper lock configuration
+    - name: Create dconf system database for wallpaper
+      ansible.builtin.copy:
+        dest: /etc/dconf/db/local.d/00-wallpaper
+        content: |
+          [org/gnome/desktop/background]
+          picture-uri='file://{{ wallpaper_path }}'
+          picture-options='centered'
+          primary-color='#000000'
+          secondary-color='#000000'
+        owner: root
+        group: root
+        mode: '0644'
+
+
+    # Step 6: Lock wallpaper keys so user cannot change them
+    - name: Lock wallpaper keys
+      ansible.builtin.copy:
+        dest: /etc/dconf/db/local.d/locks/background
+        content: |
+          /org/gnome/desktop/background/picture-uri
+          /org/gnome/desktop/background/picture-options
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Step 7: Update dconf database to apply changes
+    - name: Update dconf database
+      ansible.builtin.command: dconf update
+
+    # Step 8: Confirm success
+    - name: Confirm wallpaper applied and locked
+      ansible.builtin.debug:
+        msg: "Wallpaper applied and locked successfully for user {{ ansible_user }}"
+
