@@ -12,7 +12,7 @@
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
 
     # How to display the wallpaper: centered | zoom | scaled | stretched | spanned | wallpaper
-    picture_options: "scaled"
+    picture_options: "zoom"
 
     # Dconf paths for system-wide configuration
     dconf_dir: "/etc/dconf/db/local.d"
