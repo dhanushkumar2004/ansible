@@ -89,8 +89,6 @@
   handlers:
     - name: Update dconf database
       ansible.builtin.command: dconf update
-      args:
-        warn: false
       listen: "Update dconf database"
       become: yes
       become_user: root
