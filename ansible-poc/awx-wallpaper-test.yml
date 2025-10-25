@@ -1,25 +1,21 @@
 ---
-- name: Set and lock GNOME wallpaper system-wide (Enterprise-Safe, improved)
+- name: Set and lock GNOME wallpaper for all users (existing + future)
   hosts: all
   become: yes
   become_user: root
 
   vars:
-    # Source on the Ansible control node (relative or absolute path)
     wallpaper_source: "wallpaper.jpg"
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
-    picture_options: "centered"   # you can change to 'zoom', 'scaled', etc.
+    picture_options: "centered"   # can be 'zoom', 'scaled', etc.
 
     dconf_dir: "/etc/dconf/db/local.d"
     dconf_file: "00-wallpaper"
     dconf_lock_dir: "/etc/dconf/db/local.d/locks"
 
-  tags: [wallpaper, dconf]
-
   tasks:
-    # -------------------------
-    # 1. Ensure required directories exist
-    # -------------------------
+
+    # 1️⃣ Ensure required directories exist
     - name: Ensure dconf directories exist
       ansible.builtin.file:
         path: "{{ item }}"
@@ -28,11 +24,8 @@
       loop:
         - "{{ dconf_dir }}"
         - "{{ dconf_lock_dir }}"
-      tags: [dirs]
 
-    # -------------------------
-    # 2. Copy wallpaper to system directory (backup enabled)
-    # -------------------------
+    # 2️⃣ Copy wallpaper to system directory
     - name: Copy wallpaper to system directory
       ansible.builtin.copy:
         src: "{{ wallpaper_source }}"
@@ -42,28 +35,22 @@
         mode: '0644'
         backup: yes
       notify: Update dconf database
-      tags: [copy]
 
-    # -------------------------
-    # 3. Define system-wide wallpaper defaults
-    # -------------------------
+    # 3️⃣ Create system-wide wallpaper default
     - name: Create GNOME system-wide wallpaper config
       ansible.builtin.copy:
         dest: "{{ dconf_dir }}/{{ dconf_file }}"
         content: |
           [org/gnome/desktop/background]
-          picture-uri='file://{{ wallpaper_dest }}'
-          picture-uri-dark='file://{{ wallpaper_dest }}'
+          picture-uri='file:///usr/share/backgrounds/custom_wallpaper.jpg'
+          picture-uri-dark='file:///usr/share/backgrounds/custom_wallpaper.jpg'
           picture-options='{{ picture_options }}'
         owner: root
         group: root
         mode: '0644'
       notify: Update dconf database
-      tags: [dconf]
 
-    # -------------------------
-    # 4. Lock wallpaper settings so users cannot change
-    # -------------------------
+    # 4️⃣ Lock wallpaper keys so users cannot change them
     - name: Create GNOME wallpaper lock file
       ansible.builtin.copy:
         dest: "{{ dconf_lock_dir }}/{{ dconf_file }}"
@@ -74,23 +61,29 @@
         group: root
         mode: '0444'
       notify: Update dconf database
-      tags: [locks]
 
-    # -------------------------
-    # 5. Final confirmation message
-    # -------------------------
+    # 5️⃣ Reset existing user dconf background settings
+    - name: Reset wallpaper settings for all existing users
+      ansible.builtin.shell: |
+        for user in $(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd); do
+          echo "Resetting wallpaper for $user"
+          sudo -u "$user" dbus-launch dconf reset -f /org/gnome/desktop/background/
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # 6️⃣ Display completion message
     - name: Display completion message
       ansible.builtin.debug:
         msg: |
-          Wallpaper has been set to {{ wallpaper_dest }} and locked system-wide.
-          If users are currently logged in, they will see the change at next GNOME login.
-      tags: [info]
+          ✅ Wallpaper has been set to {{ wallpaper_dest }} and locked for all users.
+          - Future logins will automatically use this wallpaper.
+          - Existing users will see it after next GNOME login.
 
   handlers:
     - name: Update dconf database
       ansible.builtin.command: dconf update
-      listen: "Update dconf database"
       become: yes
       become_user: root
-
-# End of playbook
+      listen: "Update dconf database"
