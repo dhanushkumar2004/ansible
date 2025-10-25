@@ -6,7 +6,7 @@
 
   vars:
     # Source on the Ansible control node (relative or absolute path)
-    wallpaper_source: "ansible-poc/wallpaper.jpg"
+    wallpaper_source: "wallpaper.jpg"
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
     picture_options: "centered"   # you can change to 'zoom', 'scaled', etc.
 
