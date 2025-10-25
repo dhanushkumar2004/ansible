@@ -6,7 +6,7 @@
 
   vars:
     # Path to wallpaper image in your project directory
-    wallpaper_source: "wallpaper.jpg"
+    wallpaper_source: "custom_wallpaper3.jpg"
 
     # Where it will be copied on the remote systems
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
