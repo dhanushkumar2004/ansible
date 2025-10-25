@@ -1,66 +1,37 @@
 ---
-- name: Set and lock GNOME wallpaper system-wide (AWX Demo Ready)
+- name: Set and lock GNOME wallpaper system-wide (Direct from Git)
   hosts: all
   become: yes
-  gather_facts: yes
-  ignore_unreachable: yes   # Do not fail run if some hosts are unreachable
 
   vars:
-    wallpaper_source: "files/custom_wallpaper.jpg"       # Relative to project root
+    wallpaper_url: "https://raw.githubusercontent.com/dhanushkumar2004/ansible/main/ansible-poc/files/custom_wallpaper.jpg"
     wallpaper_dest: "/usr/share/backgrounds/custom_wallpaper.jpg"
     dconf_dir: "/etc/dconf/db/local.d"
     dconf_file: "00-wallpaper"
     dconf_lock_dir: "/etc/dconf/db/local.d/locks"
 
-  pre_tasks:
-    - name: Ensure wallpaper file exists in project
-      ansible.builtin.stat:
-        path: "{{ wallpaper_source }}"
-      register: wallpaper_stat
-
-    - name: Fail early if wallpaper file missing
-      ansible.builtin.fail:
-        msg: >
-          Wallpaper file {{ wallpaper_source }} not found in project.
-          Make sure it is present under the project 'files/' folder in AWX.
-      when: not wallpaper_stat.stat.exists
-
-    - name: Check if 'dconf' binary is present
-      ansible.builtin.command: which dconf
-      register: dconf_bin
-      ignore_errors: yes
-      changed_when: false
-
-    - name: Install dconf-cli on Debian/Ubuntu if missing
-      ansible.builtin.apt:
-        name: dconf-cli
-        state: present
-        update_cache: yes
-      when:
-        - dconf_bin.rc != 0
-        - ansible_facts['os_family'] == 'Debian'
-
   tasks:
-    - name: Ensure dconf config directory exists
+
+    # 1️⃣ Ensure dconf directories exist
+    - name: Ensure dconf directories exist
       ansible.builtin.file:
-        path: "{{ dconf_dir }}"
+        path: "{{ item }}"
         state: directory
         mode: '0755'
+      loop:
+        - "{{ dconf_dir }}"
+        - "{{ dconf_lock_dir }}"
 
-    - name: Ensure dconf lock directory exists
-      ansible.builtin.file:
-        path: "{{ dconf_lock_dir }}"
-        state: directory
-        mode: '0755'
-
-    - name: Copy wallpaper to system directory
-      ansible.builtin.copy:
-        src: "{{ wallpaper_source }}"
+    # 2️⃣ Download wallpaper from GitHub directly
+    - name: Download wallpaper from GitHub
+      ansible.builtin.get_url:
+        url: "{{ wallpaper_url }}"
         dest: "{{ wallpaper_dest }}"
         owner: root
         group: root
         mode: '0644'
 
+    # 3️⃣ Configure system-wide wallpaper
     - name: Create GNOME system-wide wallpaper config
       ansible.builtin.copy:
         dest: "{{ dconf_dir }}/{{ dconf_file }}"
@@ -72,7 +43,8 @@
         group: root
         mode: '0644'
 
-    - name: Create GNOME wallpaper lock file
+    # 4️⃣ Lock wallpaper settings
+    - name: Lock GNOME wallpaper
       ansible.builtin.copy:
         dest: "{{ dconf_lock_dir }}/{{ dconf_file }}"
         content: |
@@ -82,13 +54,15 @@
         group: root
         mode: '0444'
 
-    - name: Update dconf database
-      ansible.builtin.shell: dconf update
+    # 5️⃣ Update dconf database
+    - name: Apply dconf database changes
+      ansible.builtin.command: dconf update
       args:
         warn: false
 
-    - name: Display completion message
+    # 6️⃣ Display success message
+    - name: Completion message
       ansible.builtin.debug:
         msg: >
-          Wallpaper has been set to {{ wallpaper_dest }} and locked system-wide.
-          Changes will apply automatically at next GNOME login for all users.
+          ✅ Wallpaper has been set from Git and locked system-wide.
+          Changes apply at next GNOME login.
