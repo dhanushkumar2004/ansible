@@ -18,21 +18,6 @@
 
   tasks:
     # -------------------------
-    # 0. Verify wallpaper exists on control node
-    # -------------------------
-    - name: Check if wallpaper source exists on control node
-      ansible.builtin.stat:
-        path: "{{ wallpaper_source }}"
-      delegate_to: localhost
-      run_once: true
-      register: wallpaper_stat
-
-    - name: Fail if wallpaper source is missing on control node
-      ansible.builtin.fail:
-        msg: "Wallpaper source '{{ wallpaper_source }}' not found on control node. Put the file in the project directory or update the path."
-      when: not wallpaper_stat.stat.exists
-
-    # -------------------------
     # 1. Ensure required directories exist
     # -------------------------
     - name: Ensure dconf directories exist
