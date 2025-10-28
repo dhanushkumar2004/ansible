@@ -6,7 +6,7 @@
   vars:
     smtp_host: "smtpout.secureserver.net"       # GoDaddy SMTP server
     smtp_port: 587                              # STARTTLS port
-    mail_to: "recipient@domain.com"             # 👈 replace with your email
+    mail_to: "dhanushkumar.rb@fcsonline.co.in"  # 👈 replace with your email
     mail_from: "{{ smtp_user }}"                # Injected automatically from your AWX credential
     subject: "AWX SMTP Credential Test - {{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
 
@@ -34,3 +34,4 @@
     - name: Confirm mail sent
       debug:
         msg: "📧 Test email sent successfully to {{ mail_to }}"
+
