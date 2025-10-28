@@ -62,15 +62,18 @@
     ####################################################################
     # --- MEMORY INFO --------------------------------------------------
     ####################################################################
-    - name: Get RAM slot usage and memory type from dmidecode
+    - name: Get RAM slot usage and memory type from dmidecode (robust)
       shell: |
-        total_slots=$(dmidecode -t memory | grep -c '^Memory Device')
-        used_slots=$(dmidecode -t memory | grep -A3 '^Memory Device' | grep -c 'Size: [1-9]')
-        mem_type=$(dmidecode -t memory | awk -F: '/^\s*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
-        if [ -z "$mem_type" ]; then mem_type="Unknown"; fi
+        total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
+        used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
+        mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
+        [ -z "$mem_type" ] && mem_type="Unknown"
         echo "$used_slots/$total_slots,$mem_type"
       register: ram_info
       changed_when: false
+      args:
+        executable: /bin/bash
+
 
     ####################################################################
     # --- STORAGE INFO (Bash Compatible) -------------------------------
