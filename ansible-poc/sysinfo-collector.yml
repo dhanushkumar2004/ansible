@@ -1,0 +1,57 @@
+---
+- name: Collect and display system information from Ubuntu hosts
+  hosts: all
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Ensure dmidecode is installed (for RAM details)
+      apt:
+        name: dmidecode
+        state: present
+      become: yes
+
+    - name: Get RAM slot and type info
+      shell: |
+        total_slots=$(sudo dmidecode -t memory | grep -i "Locator:" | grep -v "Bank" | wc -l)
+        used_slots=$(sudo dmidecode -t memory | grep -A5 "Memory Device" | grep -i "Size:" | grep -v "No Module Installed" | wc -l)
+        mem_type=$(sudo dmidecode -t memory | grep -m1 "Type:" | awk '{print $2}')
+        echo "Slots Used: ${used_slots}/${total_slots}, Type: ${mem_type}"
+      register: ram_info
+      changed_when: false
+
+    - name: Detect drive types (HDD or SSD)
+      shell: |
+        for dev in /sys/block/*; do
+          name=$(basename "$dev")
+          if [[ "$(cat $dev/queue/rotational 2>/dev/null)" == "0" ]]; then
+            echo "$name:SSD"
+          else
+            echo "$name:HDD"
+          fi
+        done
+      register: drive_type_output
+      changed_when: false
+
+    - name: Calculate total storage in GB
+      set_fact:
+        total_storage_gb: >-
+          {{
+            (ansible_devices | dict2items |
+            selectattr('value.size', 'defined') |
+            map(attribute='value.size') |
+            map('regex_replace', 'G', '') |
+            map('float') |
+            sum) | round(2)
+          }}
+
+    - name: Display system summary
+      debug:
+        msg: |
+          🖥️ Hostname: {{ ansible_hostname }}
+          🧠 Processor: {{ ansible_processor[1] | default('N/A') }}
+          💾 Total RAM: {{ ansible_memtotal_mb }} MB
+          🔢 RAM Info: {{ ram_info.stdout }}
+          📦 Storage Total: {{ total_storage_gb }} GB
+          💽 Drive Type(s): {{ drive_type_output.stdout_lines | join(', ') }}
+
