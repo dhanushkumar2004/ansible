@@ -127,8 +127,8 @@
 
   vars:
     report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
-    csv_file: "/runner/sysinfo_report_{{ report_timestamp }}.csv"
-    json_file: "/runner/sysinfo_report_{{ report_timestamp }}.json"
+    csv_file: "/tmp/sysinfo_report_{{ report_timestamp }}.csv"
+    json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
 
   tasks:
     - name: Collect each host's sysinfo summary
@@ -163,3 +163,4 @@
               ✅ Reports generated:
               CSV: {{ csv_file }}
               JSON: {{ json_file }}
+
