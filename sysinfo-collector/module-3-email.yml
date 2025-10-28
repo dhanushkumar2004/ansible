@@ -1,7 +1,4 @@
 ---
-# ==========================================================
-# MODULE 1 - Collect system info from all Ubuntu hosts
-# ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -10,36 +7,13 @@
   become_method: sudo
 
   tasks:
-
-    - name: Ensure required packages are installed
-      block:
-        - name: Check if required binaries already exist
-          stat:
-            path: "{{ item }}"
-          register: pkg_binaries
-          loop:
-            - /usr/sbin/dmidecode
-            - /usr/bin/lsblk
-            - /usr/bin/lsb_release
-          changed_when: false
-
-        - name: Install if missing
-          apt:
-            name:
-              - dmidecode
-              - util-linux
-              - lsb-release
-            state: present
-            update_cache: yes
-            force_apt_get: yes
-          environment:
-            DEBIAN_FRONTEND: noninteractive
-          when: >
-            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
-
-      rescue:
-        - debug:
-            msg: "⚠️ Package installation failed or timed out; continuing with available tools."
+    - name: Ensure required tools installed
+      apt:
+        name: [dmidecode, util-linux, lsb-release]
+        state: present
+        update_cache: yes
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
@@ -75,80 +49,59 @@
       args:
         executable: /bin/bash
 
-    - name: Save system info
+    - name: Save sysinfo fact
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
-          cpu: "{{ cpu_model.stdout | default('N/A') }}"
+          cpu: "{{ cpu_model.stdout }}"
           ram_mb: "{{ ansible_memtotal_mb }}"
-          ram_slots: "{{ (ram_info.stdout.split(',')[0]) | default('N/A') }}"
-          ram_type: "{{ (ram_info.stdout.split(',')[1]) | default('Unknown') }}"
-          storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
-          drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
+          ram_slots: "{{ (ram_info.stdout.split(',')[0]) }}"
+          ram_type: "{{ (ram_info.stdout.split(',')[1]) }}"
+          storage_gb: "{{ (disk_info.stdout.split(',')[0]) }}"
+          drives: "{{ (disk_info.stdout.split(',',2)[1]) }}"
 
-    - name: Display summary
-      debug:
-        msg: |
-          🖥️ Hostname: {{ collected_sysinfo.hostname }}
-          🧠 CPU: {{ collected_sysinfo.cpu }}
-          💾 RAM: {{ collected_sysinfo.ram_mb }} MB
-          🔢 Slots/Type: {{ collected_sysinfo.ram_slots }} ({{ collected_sysinfo.ram_type }})
-          📦 Storage: {{ collected_sysinfo.storage_gb }} GB
-          💽 Drives: {{ collected_sysinfo.drives }}
-
-
-# ==========================================================
-# MODULE 2 - Aggregate results and email reports
-# ==========================================================
-- name: Aggregate results and send reports
+- name: Aggregate and email reports
   hosts: all
   gather_facts: no
   become: false
 
   vars:
     report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
-    csv_file: "/tmp/sysinfo_report_{{ report_timestamp }}.csv"
-    json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
+    report_dir: "/runner/artifacts/{{ ansible_job_id | default('job') }}"
+    csv_file: "{{ report_dir }}/sysinfo_report_{{ report_timestamp }}.csv"
+    json_file: "{{ report_dir }}/sysinfo_report_{{ report_timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
     mail_to: "dhanushkumar.rb@fcsonline.co.in"
-    mail_from: "{{ smtp_user }}"
     subject: "AWX Sysinfo Report - {{ report_timestamp }}"
 
   tasks:
+    - name: Ensure report directory exists
+      run_once: true
+      delegate_to: localhost
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: '0755'
 
-    - name: Aggregate and generate reports
+    - name: Aggregate host info and write files
       run_once: true
       delegate_to: localhost
       vars:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
       block:
-
-        - name: Ensure /tmp exists
-          file:
-            path: /tmp
-            state: directory
-
-        - name: Write JSON
-          copy:
+        - copy:
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
-
-        - name: Write CSV (fully quoted)
-          copy:
+        - copy:
             dest: "{{ csv_file }}"
             content: |
               "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
               {% for i in data_list %}
               "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
               {% endfor %}
-
-        - name: Display file paths
-          debug:
-            msg: |
-              ✅ Reports generated:
-              CSV: {{ csv_file }}
-              JSON: {{ json_file }}
+        - debug:
+            msg: "✅ Reports created in {{ report_dir }}"
 
     - name: Send email with attachments
       run_once: true
@@ -191,13 +144,7 @@
             server.starttls(context=context)
             server.login(sender_email, password)
             server.sendmail(sender_email, receiver_email, msg.as_string())
-
-        print("📧 Email sent successfully with reports attached!")
+        print("📧 Email sent successfully with CSV + JSON attached!")
         EOF
       args:
         executable: /bin/bash
-
-    - name: Confirm send
-      debug:
-        msg: "✅ Email sent successfully to {{ mail_to }} with CSV + JSON attached."
-
