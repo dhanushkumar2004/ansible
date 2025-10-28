@@ -11,10 +11,7 @@
 
   tasks:
 
-    ####################################################################
-    # --- REQUIRED TOOLS (Robust Install) ------------------------------
-    ####################################################################
-    - name: Ensure required packages are installed (robust and safe)
+    - name: Ensure required packages are installed
       block:
         - name: Check if required binaries already exist
           stat:
@@ -26,7 +23,7 @@
             - /usr/bin/lsb_release
           changed_when: false
 
-        - name: Installing tools if missing (quiet mode)
+        - name: Install if missing
           apt:
             name:
               - dmidecode
@@ -39,25 +36,17 @@
             DEBIAN_FRONTEND: noninteractive
           when: >
             not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
-          async: 180
-          poll: 10
 
       rescue:
         - debug:
             msg: "⚠️ Package installation failed or timed out; continuing with available tools."
 
-    ####################################################################
-    # --- CPU INFO -----------------------------------------------------
-    ####################################################################
-    - name: Get CPU model name
+    - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
-    ####################################################################
-    # --- MEMORY INFO --------------------------------------------------
-    ####################################################################
-    - name: Get RAM slot usage and memory type from dmidecode (robust)
+    - name: Get RAM slot info
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
@@ -69,10 +58,7 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- STORAGE INFO -------------------------------------------------
-    ####################################################################
-    - name: Collect block device info and classify drives
+    - name: Get storage info
       shell: |
         total=0
         out=""
@@ -89,10 +75,7 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- SAVE SYSINFO FACT -------------------------------------------
-    ####################################################################
-    - name: Save system info as structured fact
+    - name: Save system info
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
@@ -103,10 +86,7 @@
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
           drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
-    ####################################################################
-    # --- DISPLAY SUMMARY ----------------------------------------------
-    ####################################################################
-    - name: Display concise system summary
+    - name: Display summary
       debug:
         msg: |
           🖥️ Hostname: {{ collected_sysinfo.hostname }}
@@ -118,9 +98,9 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate results and send email
+# MODULE 2 - Aggregate results and email reports
 # ==========================================================
-- name: Aggregate results and send reports via email
+- name: Aggregate results and send reports
   hosts: all
   gather_facts: no
   become: false
@@ -131,34 +111,36 @@
     json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    mail_to: "dhanushkumar.rb@fcsonline.co.in"               # 👈 change to your desired recipient
+    mail_to: "kumar@st.peters.com"
     mail_from: "{{ smtp_user }}"
     subject: "AWX Sysinfo Report - {{ report_timestamp }}"
 
   tasks:
 
-    ####################################################################
-    # --- AGGREGATE AND GENERATE REPORT FILES --------------------------
-    ####################################################################
-    - name: Aggregate host info
+    - name: Aggregate and generate reports
       run_once: true
       delegate_to: localhost
       vars:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
       block:
 
-        - name: Write JSON report
+        - name: Ensure /tmp exists
+          file:
+            path: /tmp
+            state: directory
+
+        - name: Write JSON
           copy:
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
 
-        - name: Write CSV report (with quoted RAM_Slots)
+        - name: Write CSV (fully quoted)
           copy:
             dest: "{{ csv_file }}"
             content: |
-              Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
+              "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
               {% for i in data_list %}
-              {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},"{{ i.ram_slots }}",{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+              "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
               {% endfor %}
 
         - name: Display file paths
@@ -168,10 +150,7 @@
               CSV: {{ csv_file }}
               JSON: {{ json_file }}
 
-    ####################################################################
-    # --- SEND EMAIL WITH ATTACHMENTS ---------------------------------
-    ####################################################################
-    - name: Send email with sysinfo reports
+    - name: Send email with attachments
       run_once: true
       delegate_to: localhost
       shell: |
@@ -196,7 +175,6 @@
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
 
-        # Attach CSV and JSON if they exist
         for path in ["{{ csv_file }}", "{{ json_file }}"]:
             if os.path.exists(path):
                 with open(path, "rb") as f:
@@ -205,6 +183,8 @@
                 encoders.encode_base64(part)
                 part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
                 msg.attach(part)
+            else:
+                print(f"⚠️ File not found: {path}")
 
         context = ssl.create_default_context()
         with smtplib.SMTP(smtp_server, port) as server:
@@ -217,6 +197,6 @@
       args:
         executable: /bin/bash
 
-    - name: Confirm email sent
+    - name: Confirm send
       debug:
-        msg: "✅ Email successfully sent to {{ mail_to }} with attached reports."
+        msg: "✅ Email sent successfully to {{ mail_to }} with CSV + JSON attached."
