@@ -1,26 +1,60 @@
 ---
-- name: Collect and summarize system info using shell tools
+- name: Collect and summarize detailed system info using shell tools (robust version)
   hosts: all
   gather_facts: yes
   become: yes
-  become_user: root
   become_method: sudo
+  become_user: root
 
   tasks:
-    - name: Ensure required tools exist
-      apt:
-        name:
-          - dmidecode
-          - lsb-release
-          - util-linux
-        state: present
-        update_cache: yes
-      changed_when: false
+
+    ####################################################################
+    # --- REQUIRED TOOLS (Robust Install) ------------------------------
+    ####################################################################
+    - name: Ensure required packages are installed (robust and safe)
+      block:
+
+        - name: Check if required binaries already exist
+          stat:
+            path: "{{ item }}"
+          register: pkg_binaries
+          loop:
+            - /usr/sbin/dmidecode
+            - /usr/bin/lsblk
+            - /usr/bin/lsb_release
+          changed_when: false
+
+        - name: Installing tools if missing (quiet mode)
+          apt:
+            name:
+              - dmidecode
+              - util-linux
+              - lsb-release
+            state: present
+            update_cache: yes
+            force_apt_get: yes
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+          when: >
+            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
+          async: 180
+          poll: 10
+          register: apt_result
+
+      rescue:
+        - name: Warn and continue if package installation fails
+          debug:
+            msg: "⚠️ Package installation failed or timed out; continuing with available tools."
+
+        - name: Show debug info for troubleshooting
+          debug:
+            var: apt_result
+          when: apt_result is defined
 
     ####################################################################
     # --- CPU INFO -----------------------------------------------------
     ####################################################################
-    - name: Get CPU model
+    - name: Get CPU model name
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
@@ -28,11 +62,11 @@
     ####################################################################
     # --- MEMORY INFO --------------------------------------------------
     ####################################################################
-    - name: Get memory slot usage and type via dmidecode
+    - name: Get RAM slot usage and memory type from dmidecode
       shell: |
         total_slots=$(dmidecode -t memory | grep -c '^Memory Device')
         used_slots=$(dmidecode -t memory | grep -A3 '^Memory Device' | grep -c 'Size: [1-9]')
-        mem_type=$(dmidecode -t memory | awk -F: '/^\s*Type:/ {gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
+        mem_type=$(dmidecode -t memory | awk -F: '/^\s*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
         if [ -z "$mem_type" ]; then mem_type="Unknown"; fi
         echo "$used_slots/$total_slots,$mem_type"
       register: ram_info
@@ -41,11 +75,12 @@
     ####################################################################
     # --- STORAGE INFO -------------------------------------------------
     ####################################################################
-    - name: Collect block device info (filter real disks only)
+    - name: Collect block device info and classify drives
       shell: |
         total=0
         out=""
         while read -r name size rota type; do
+          # Skip non-disks (loop, rom, etc.)
           if [ "$type" != "disk" ]; then continue; fi
           gb=$(awk "BEGIN {printf \"%.2f\", $size/1024/1024/1024}")
           if [ "$rota" = "0" ]; then kind="SSD"; else kind="HDD"; fi
@@ -68,4 +103,3 @@
           🔢 RAM Slots/Type: {{ ram_info.stdout.split(',')[0] | default('N/A') }} slots, Type {{ ram_info.stdout.split(',')[1] | default('Unknown') }}
           📦 Storage Total: {{ disk_info.stdout.split(',')[0] | default('0') }} GB
           💽 Drives: {{ disk_info.stdout.split(',',2)[1] | default('N/A') }}
-
