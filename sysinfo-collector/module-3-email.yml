@@ -111,7 +111,7 @@
     json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    mail_to: "kumar@st.peters.com"
+    mail_to: "dhanushkumar.rb@fcsonline.co.in"
     mail_from: "{{ smtp_user }}"
     subject: "AWX Sysinfo Report - {{ report_timestamp }}"
 
@@ -200,3 +200,4 @@
     - name: Confirm send
       debug:
         msg: "✅ Email sent successfully to {{ mail_to }} with CSV + JSON attached."
+
