@@ -1,4 +1,7 @@
 ---
+# ==========================================================
+# MODULE 1 - Collect system info from all Ubuntu hosts
+# ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -6,10 +9,8 @@
   become_user: root
   become_method: sudo
 
-  vars:
-    collected_sysinfo: {}
-
   tasks:
+
     ####################################################################
     # --- REQUIRED TOOLS (Robust Install) ------------------------------
     ####################################################################
@@ -40,7 +41,6 @@
             not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
           async: 180
           poll: 10
-          register: apt_result
 
       rescue:
         - debug:
@@ -116,9 +116,10 @@
           📦 Storage: {{ collected_sysinfo.storage_gb }} GB
           💽 Drives: {{ collected_sysinfo.drives }}
 
-#######################################################################
-# --- SECOND PLAY: AGGREGATE RESULTS ON CONTROLLER --------------------
-#######################################################################
+
+# ==========================================================
+# MODULE 2 - Aggregate results and save reports (controller)
+# ==========================================================
 - name: Aggregate system info and create timestamped reports
   hosts: all
   gather_facts: no
@@ -126,8 +127,8 @@
 
   vars:
     report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
-    csv_file: "/tmp/sysinfo_report_{{ report_timestamp }}.csv"
-    json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
+    csv_file: "/runner/sysinfo_report_{{ report_timestamp }}.csv"
+    json_file: "/runner/sysinfo_report_{{ report_timestamp }}.json"
 
   tasks:
     - name: Collect each host's sysinfo summary
@@ -141,11 +142,6 @@
       vars:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
       block:
-        - name: Ensure /tmp exists
-          file:
-            path: "/tmp"
-            state: directory
-            mode: '0755'
 
         - name: Write JSON report
           copy:
