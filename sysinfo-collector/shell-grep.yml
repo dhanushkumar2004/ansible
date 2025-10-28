@@ -1,5 +1,5 @@
 ---
-- name: Collect and summarize detailed system info using shell tools (robust version)
+- name: Collect and summarize detailed system info using shell tools (final fixed)
   hosts: all
   gather_facts: yes
   become: yes
@@ -73,7 +73,7 @@
       changed_when: false
 
     ####################################################################
-    # --- STORAGE INFO -------------------------------------------------
+    # --- STORAGE INFO (Bash Compatible) -------------------------------
     ####################################################################
     - name: Collect block device info and classify drives
       shell: |
@@ -88,6 +88,8 @@
           total=$(awk "BEGIN {printf \"%.2f\", $total + $gb}")
         done < <(lsblk -b -d -o NAME,SIZE,ROTA,TYPE | tail -n +2)
         echo "$total,$out"
+      args:
+        executable: /bin/bash
       register: disk_info
       changed_when: false
 
