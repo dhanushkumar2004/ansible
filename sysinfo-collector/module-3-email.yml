@@ -1,0 +1,36 @@
+---
+- name: Send a simple test email using AWX SMTP credential
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    smtp_host: "smtpout.secureserver.net"       # GoDaddy SMTP server
+    smtp_port: 587                              # STARTTLS port
+    mail_to: "recipient@domain.com"             # 👈 replace with your email
+    mail_from: "{{ smtp_user }}"                # Injected automatically from your AWX credential
+    subject: "AWX SMTP Credential Test - {{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+
+  tasks:
+    - name: Send test email
+      community.general.mail:
+        host: "{{ smtp_host }}"
+        port: "{{ smtp_port }}"
+        username: "{{ smtp_user }}"
+        password: "{{ smtp_pass }}"
+        to: "{{ mail_to }}"
+        from: "{{ mail_from }}"
+        subject: "{{ subject }}"
+        body: |
+          Hello Kumar,
+
+          ✅ This is a test message sent from AWX using your secure SMTP Email credential.
+
+          If you receive this, your SMTP configuration and credential injection work perfectly!
+
+          Regards,
+          AWX Mailer
+        secure: starttls
+
+    - name: Confirm mail sent
+      debug:
+        msg: "📧 Test email sent successfully to {{ mail_to }}"
