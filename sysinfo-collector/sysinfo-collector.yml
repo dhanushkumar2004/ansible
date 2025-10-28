@@ -1,57 +1,93 @@
 ---
-- name: Collect and display system information from Ubuntu hosts
+- name: Collect and display detailed system information from Ubuntu hosts
   hosts: all
   gather_facts: yes
+
+  # Explicit, global privilege escalation to root
   become: yes
+  become_method: sudo
+  become_user: root
+
+  vars:
+    # nothing written to disk — just display
+    skip_write: true
 
   tasks:
-    - name: Ensure dmidecode is installed (for RAM details)
+    - name: Ensure apt cache is up-to-date (safe)
+      apt:
+        update_cache: yes
+      # running as root due to global become
+
+    - name: Install dmidecode if not present
       apt:
         name: dmidecode
         state: present
-      become: yes
+      register: dmidecode_installed
+      changed_when: dmidecode_installed.changed
 
-    - name: Get RAM slot and type info
+    - name: Gather RAM slot count, used slots and memory type via dmidecode
       shell: |
-        total_slots=$(sudo dmidecode -t memory | grep -i "Locator:" | grep -v "Bank" | wc -l)
-        used_slots=$(sudo dmidecode -t memory | grep -A5 "Memory Device" | grep -i "Size:" | grep -v "No Module Installed" | wc -l)
-        mem_type=$(sudo dmidecode -t memory | grep -m1 "Type:" | awk '{print $2}')
-        echo "Slots Used: ${used_slots}/${total_slots}, Type: ${mem_type}"
+        # Count Memory Device blocks (total slots)
+        total_slots=$(dmidecode -t memory | grep -c "^Memory Device")
+        # Count installed modules (Size: not "No Module Installed")
+        used_slots=$(dmidecode -t memory | awk '/^Memory Device/{p=1; next} p && /^$/ {p=0} p { if ($0 ~ /Size:/) { if ($0 !~ /No Module Installed/) installed++ } } END{print installed+0}')
+        # Get the first non-empty "Type:" found in memory device section (e.g., DDR4)
+        mem_type=$(dmidecode -t memory | awk -F: '/Type:/{gsub(/^ +| +$/,"",$2); if ($2 != "Unknown" && $2 != "") { print $2; exit }}')
+        # If empty, set a fallback
+        if [ -z "$mem_type" ]; then mem_type="Unknown"; fi
+        echo "${used_slots}/${total_slots},${mem_type}"
       register: ram_info
       changed_when: false
 
-    - name: Detect drive types (HDD or SSD)
+    - name: Detect drive types (HDD or SSD) for block devices
       shell: |
-        for dev in /sys/block/*; do
-          name=$(basename "$dev")
-          if [[ "$(cat $dev/queue/rotational 2>/dev/null)" == "0" ]]; then
-            echo "$name:SSD"
-          else
-            echo "$name:HDD"
+        out=""
+        for devpath in /sys/block/*; do
+          dev=$(basename "$devpath")
+          # skip loop, ram, and those without rotational file
+          if [[ "$dev" =~ ^loop ]] || [[ "$dev" =~ ^ram ]] ; then
+            continue
+          fi
+          if [[ -f "$devpath/queue/rotational" ]]; then
+            rot=$(cat "$devpath/queue/rotational" 2>/dev/null || echo "")
+            if [[ "$rot" == "0" ]]; then
+              out="$out $dev:SSD"
+            else
+              out="$out $dev:HDD"
+            fi
           fi
         done
+        # trim leading space
+        echo "${out#" "}"
       register: drive_type_output
       changed_when: false
 
-    - name: Calculate total storage in GB
+    - name: Calculate total storage (sum of device sizes if available)
       set_fact:
         total_storage_gb: >-
           {{
-            (ansible_devices | dict2items |
-            selectattr('value.size', 'defined') |
-            map(attribute='value.size') |
-            map('regex_replace', 'G', '') |
-            map('float') |
-            sum) | round(2)
+            (
+              ansible_devices | dict2items |
+              selectattr('value.size', 'defined') |
+              map(attribute='value.size') |
+              map('regex_replace', '\\s*G$', '') |
+              map('regex_replace', '\\s*GB$', '') |
+              map('float') |
+              sum
+            ) | default(0) | round(2)
           }}
 
-    - name: Display system summary
+    - name: Prepare nice summary and show facts
       debug:
         msg: |
-          🖥️ Hostname: {{ ansible_hostname }}
-          🧠 Processor: {{ ansible_processor[1] | default('N/A') }}
-          💾 Total RAM: {{ ansible_memtotal_mb }} MB
-          🔢 RAM Info: {{ ram_info.stdout }}
-          📦 Storage Total: {{ total_storage_gb }} GB
-          💽 Drive Type(s): {{ drive_type_output.stdout_lines | join(', ') }}
-
+          ----------------------------
+          Host:        {{ inventory_hostname }} ({{ ansible_fqdn | default(ansible_hostname) }})
+          Hostname:    {{ ansible_hostname }}
+          Processor:   {{ (ansible_processor | join(' ') ) | default('N/A') }}
+          CPU vCPUs:   {{ ansible_processor_vcpus | default('N/A') }}
+          Total RAM:   {{ ansible_memtotal_mb }} MB
+          RAM slots:   {{ ram_info.stdout.split(',')[0] | default('N/A') }}
+          Memory Type: {{ ram_info.stdout.split(',')[1] | default('Unknown') }}
+          Storage Sum: {{ total_storage_gb }} GB
+          Drive Types: {{ drive_type_output.stdout | default('N/A') }}
+          ----------------------------
