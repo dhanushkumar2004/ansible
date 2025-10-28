@@ -1,37 +1,57 @@
 ---
-- name: Send a simple test email using AWX SMTP credential
+- name: Send a simple test email without community.general dependency
   hosts: localhost
   gather_facts: no
 
   vars:
-    smtp_host: "smtpout.secureserver.net"       # GoDaddy SMTP server
-    smtp_port: 587                              # STARTTLS port
-    mail_to: "dhanushkumar.rb@fcsonline.co.in"  # 👈 replace with your email
-    mail_from: "{{ smtp_user }}"                # Injected automatically from your AWX credential
+    smtp_host: "smtpout.secureserver.net"        # GoDaddy SMTP
+    smtp_port: 587                               # STARTTLS
+    mail_to: "dhanushkumar.rb@fcsonline.co.in"              # 👈 change this to your own email
+    mail_from: "{{ smtp_user }}"                 # injected from AWX credential
     subject: "AWX SMTP Credential Test - {{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    mail_body: |
+      Hello Kumar,
+
+      ✅ This is a test message sent from AWX using your secure SMTP Email credential.
+
+      If you receive this, your SMTP configuration and credential injection work perfectly!
+
+      Regards,
+      AWX Mailer
 
   tasks:
-    - name: Send test email
-      community.general.mail:
-        host: "{{ smtp_host }}"
-        port: "{{ smtp_port }}"
-        username: "{{ smtp_user }}"
-        password: "{{ smtp_pass }}"
-        to: "{{ mail_to }}"
-        from: "{{ mail_from }}"
-        subject: "{{ subject }}"
-        body: |
-          Hello Kumar,
+    - name: Send test email via Python smtplib
+      shell: |
+        python3 - <<'EOF'
+        import smtplib, ssl
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
 
-          ✅ This is a test message sent from AWX using your secure SMTP Email credential.
+        smtp_server = "{{ smtp_host }}"
+        port = {{ smtp_port }}
+        sender_email = "{{ smtp_user }}"
+        password = "{{ smtp_pass }}"
+        receiver_email = "{{ mail_to }}"
+        subject = "{{ subject }}"
+        body = """{{ mail_body | replace('"', '\\"') }}"""
 
-          If you receive this, your SMTP configuration and credential injection work perfectly!
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = receiver_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
 
-          Regards,
-          AWX Mailer
-        secure: starttls
+        context = ssl.create_default_context()
+        with smtplib.SMTP(smtp_server, port) as server:
+            server.starttls(context=context)
+            server.login(sender_email, password)
+            server.sendmail(sender_email, receiver_email, msg.as_string())
 
-    - name: Confirm mail sent
+        print("📧 Test email sent successfully to {{ mail_to }}")
+        EOF
+      args:
+        executable: /bin/bash
+
+    - name: Confirm send
       debug:
-        msg: "📧 Test email sent successfully to {{ mail_to }}"
-
+        msg: "✅ Test email task executed successfully — check your inbox!"
