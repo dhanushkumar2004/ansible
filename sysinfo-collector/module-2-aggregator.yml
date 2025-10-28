@@ -1,0 +1,73 @@
+---
+- name: Aggregate system info from all hosts and generate timestamped CSV + JSON reports
+  hosts: all
+  gather_facts: no
+  become: no
+
+  vars:
+    # Generate timestamp for unique filenames
+    report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    csv_file: "/tmp/sysinfo_report_{{ report_timestamp }}.csv"
+    json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
+
+  tasks:
+
+    ####################################################################
+    # --- STEP 1: Simulate collected info (for standalone testing) -----
+    ####################################################################
+    - name: Simulate collected info (for standalone testing)
+      set_fact:
+        sysinfo_summary:
+          hostname: "{{ ansible_hostname | default('unknown') }}"
+          cpu: "{{ ansible_processor[1] | default('N/A') }}"
+          ram_mb: "{{ ansible_memtotal_mb | default(0) }}"
+          ram_slots: "2/4"
+          ram_type: "DDR4"
+          storage_gb: "476.94"
+          drives: "nvme0n1:SSD(476.94GB)"
+      when: sysinfo_summary is not defined
+
+    ####################################################################
+    # --- STEP 2: Register host info globally --------------------------
+    ####################################################################
+    - name: Register host sysinfo into global list
+      set_fact:
+        all_hosts_sysinfo: "{{ all_hosts_sysinfo | default([]) + [ sysinfo_summary ] }}"
+      run_once: false
+
+    ####################################################################
+    # --- STEP 3: Aggregate data on controller node --------------------
+    ####################################################################
+    - name: Aggregate results and generate timestamped files
+      run_once: true
+      delegate_to: localhost
+      vars:
+        data_list: "{{ hostvars | dict2items | map(attribute='value.sysinfo_summary') | select('defined') | list }}"
+      block:
+
+        - name: Ensure /tmp exists
+          file:
+            path: "/tmp"
+            state: directory
+            mode: '0755'
+
+        - name: Write JSON report
+          copy:
+            dest: "{{ json_file }}"
+            content: "{{ data_list | to_nice_json }}"
+
+        - name: Write CSV report
+          copy:
+            dest: "{{ csv_file }}"
+            content: |
+              Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
+              {% for i in data_list %}
+              {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+              {% endfor %}
+
+        - name: Display generated file names
+          debug:
+            msg: |
+              ✅ Reports generated:
+              CSV: {{ csv_file }}
+              JSON: {{ json_file }}
