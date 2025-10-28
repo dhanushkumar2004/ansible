@@ -1,0 +1,169 @@
+---
+- name: Collect detailed system info from all hosts
+  hosts: all
+  gather_facts: yes
+  become: yes
+  become_user: root
+  become_method: sudo
+
+  vars:
+    collected_sysinfo: {}
+
+  tasks:
+    ####################################################################
+    # --- REQUIRED TOOLS (Robust Install) ------------------------------
+    ####################################################################
+    - name: Ensure required packages are installed (robust and safe)
+      block:
+        - name: Check if required binaries already exist
+          stat:
+            path: "{{ item }}"
+          register: pkg_binaries
+          loop:
+            - /usr/sbin/dmidecode
+            - /usr/bin/lsblk
+            - /usr/bin/lsb_release
+          changed_when: false
+
+        - name: Installing tools if missing (quiet mode)
+          apt:
+            name:
+              - dmidecode
+              - util-linux
+              - lsb-release
+            state: present
+            update_cache: yes
+            force_apt_get: yes
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+          when: >
+            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
+          async: 180
+          poll: 10
+          register: apt_result
+
+      rescue:
+        - debug:
+            msg: "⚠️ Package installation failed or timed out; continuing with available tools."
+
+    ####################################################################
+    # --- CPU INFO -----------------------------------------------------
+    ####################################################################
+    - name: Get CPU model name
+      shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
+      register: cpu_model
+      changed_when: false
+
+    ####################################################################
+    # --- MEMORY INFO --------------------------------------------------
+    ####################################################################
+    - name: Get RAM slot usage and memory type from dmidecode (robust)
+      shell: |
+        total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
+        used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
+        mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
+        [ -z "$mem_type" ] && mem_type="Unknown"
+        echo "$used_slots/$total_slots,$mem_type"
+      register: ram_info
+      changed_when: false
+      args:
+        executable: /bin/bash
+
+    ####################################################################
+    # --- STORAGE INFO -------------------------------------------------
+    ####################################################################
+    - name: Collect block device info and classify drives
+      shell: |
+        total=0
+        out=""
+        while read -r name size rota type; do
+          if [ "$type" != "disk" ]; then continue; fi
+          gb=$(awk "BEGIN {printf \"%.2f\", $size/1024/1024/1024}")
+          if [ "$rota" = "0" ]; then kind="SSD"; else kind="HDD"; fi
+          out="$out $name:${kind}(${gb}GB)"
+          total=$(awk "BEGIN {printf \"%.2f\", $total + $gb}")
+        done < <(lsblk -b -d -o NAME,SIZE,ROTA,TYPE | tail -n +2)
+        echo "$total,$out"
+      register: disk_info
+      changed_when: false
+      args:
+        executable: /bin/bash
+
+    ####################################################################
+    # --- SAVE SYSINFO FACT -------------------------------------------
+    ####################################################################
+    - name: Save system info as structured fact
+      set_fact:
+        collected_sysinfo:
+          hostname: "{{ ansible_hostname }}"
+          cpu: "{{ cpu_model.stdout | default('N/A') }}"
+          ram_mb: "{{ ansible_memtotal_mb }}"
+          ram_slots: "{{ (ram_info.stdout.split(',')[0]) | default('N/A') }}"
+          ram_type: "{{ (ram_info.stdout.split(',')[1]) | default('Unknown') }}"
+          storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
+          drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
+
+    ####################################################################
+    # --- DISPLAY SUMMARY ----------------------------------------------
+    ####################################################################
+    - name: Display concise system summary
+      debug:
+        msg: |
+          🖥️ Hostname: {{ collected_sysinfo.hostname }}
+          🧠 CPU: {{ collected_sysinfo.cpu }}
+          💾 RAM: {{ collected_sysinfo.ram_mb }} MB
+          🔢 Slots/Type: {{ collected_sysinfo.ram_slots }} ({{ collected_sysinfo.ram_type }})
+          📦 Storage: {{ collected_sysinfo.storage_gb }} GB
+          💽 Drives: {{ collected_sysinfo.drives }}
+
+#######################################################################
+# --- SECOND PLAY: AGGREGATE RESULTS ON CONTROLLER --------------------
+#######################################################################
+- name: Aggregate system info and create timestamped reports
+  hosts: all
+  gather_facts: no
+  become: false
+
+  vars:
+    report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    csv_file: "/tmp/sysinfo_report_{{ report_timestamp }}.csv"
+    json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
+
+  tasks:
+    - name: Collect each host's sysinfo summary
+      set_fact:
+        all_hosts_sysinfo: "{{ all_hosts_sysinfo | default([]) + [ hostvars[inventory_hostname].collected_sysinfo ] }}"
+      run_once: false
+
+    - name: Aggregate data and generate timestamped files
+      run_once: true
+      delegate_to: localhost
+      vars:
+        data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
+      block:
+        - name: Ensure /tmp exists
+          file:
+            path: "/tmp"
+            state: directory
+            mode: '0755'
+
+        - name: Write JSON report
+          copy:
+            dest: "{{ json_file }}"
+            content: "{{ data_list | to_nice_json }}"
+
+        - name: Write CSV report
+          copy:
+            dest: "{{ csv_file }}"
+            content: |
+              Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
+              {% for i in data_list %}
+              {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+              {% endfor %}
+
+        - name: Display generated file names
+          debug:
+            msg: |
+              ✅ Reports generated:
+              CSV: {{ csv_file }}
+              JSON: {{ json_file }}
