@@ -1,0 +1,67 @@
+---
+- name: Collect and summarize system info using Ansible facts only
+  hosts: all
+  gather_facts: yes
+  become: yes
+  become_method: sudo
+  become_user: root
+
+  tasks:
+    - name: Verify key facts are available
+      debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Processor list count: {{ ansible_processor | length }}"
+          - "Detected devices: {{ (ansible_devices.keys() | list) if ansible_devices is defined else 'N/A' }}"
+
+    - name: Derive total storage (sum of real disks only)
+      set_fact:
+        total_storage_gb: >-
+          {{
+            (
+              ansible_devices
+              | dict2items
+              | selectattr('value.host', 'defined')
+              | selectattr('value.sectors', 'defined')
+              | map(attribute='value.size')
+              | map('regex_replace', '\\s*G$', '')
+              | map('regex_replace', '\\s*GB$', '')
+              | map('float')
+              | sum
+            ) | round(2)
+          }}
+      when: ansible_devices is defined
+
+    - name: Detect drive rotational type if available
+      set_fact:
+        drive_type_summary: >-
+          {{
+            ansible_devices
+            | dict2items
+            | selectattr('value.host', 'defined')
+            | selectattr('value.rotational', 'defined')
+            | map(attribute='key')
+            | map('regex_replace', '^', '')
+            | list
+            | zip(ansible_devices
+                  | dict2items
+                  | selectattr('value.host', 'defined')
+                  | selectattr('value.rotational', 'defined')
+                  | map(attribute='value.rotational')
+                  | list)
+            | map('join', ':')
+            | map('regex_replace', ':0', ':SSD')
+            | map('regex_replace', ':1', ':HDD')
+            | join(', ')
+          }}
+      when: ansible_devices is defined
+
+    - name: Display concise system summary (Ansible facts only)
+      debug:
+        msg: |
+          🖥️ Hostname: {{ ansible_hostname }}
+          🧠 CPU: {{ ansible_processor[1] | default(ansible_processor[0] | default('N/A')) }}
+          💾 Total RAM: {{ ansible_memtotal_mb }} MB
+          📦 Storage Total: {{ total_storage_gb | default('0') }} GB
+          💽 Drives: {{ drive_type_summary | default('N/A') }}
