@@ -10,7 +10,6 @@
   become_method: sudo
 
   tasks:
-
     ####################################################################
     # --- REQUIRED TOOLS (Robust Install) ------------------------------
     ####################################################################
@@ -41,7 +40,6 @@
             not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
           async: 180
           poll: 10
-
       rescue:
         - debug:
             msg: "⚠️ Package installation failed or timed out; continuing with available tools."
@@ -142,7 +140,6 @@
       vars:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
       block:
-
         - name: Write JSON report
           copy:
             dest: "{{ json_file }}"
@@ -164,3 +161,77 @@
               CSV: {{ csv_file }}
               JSON: {{ json_file }}
 
+
+# ==========================================================
+# MODULE 3 - Verify report contents
+# ==========================================================
+- name: Verify and display sysinfo report contents
+  hosts: localhost
+  gather_facts: no
+  become: false
+
+  vars:
+    report_dir: "/tmp"
+    csv_pattern: "sysinfo_report_*.csv"
+    json_pattern: "sysinfo_report_*.json"
+
+  tasks:
+    - name: Find latest CSV report
+      find:
+        paths: "{{ report_dir }}"
+        patterns: "{{ csv_pattern }}"
+        recurse: no
+        file_type: file
+      register: csv_reports
+
+    - name: Fail if CSV missing
+      fail:
+        msg: "❌ No sysinfo_report_*.csv found in {{ report_dir }}"
+      when: csv_reports.files | length == 0
+
+    - name: Get newest CSV path
+      set_fact:
+        latest_csv: "{{ (csv_reports.files | sort(attribute='mtime') | last).path }}"
+
+    - name: Read CSV file
+      slurp:
+        src: "{{ latest_csv }}"
+      register: csv_data
+
+    - name: Show CSV content
+      debug:
+        msg: |
+          ✅ Found CSV: {{ latest_csv }}
+          ---- CSV Content Start ----
+          {{ csv_data.content | b64decode }}
+          ---- CSV Content End ----
+
+    - name: Find latest JSON report
+      find:
+        paths: "{{ report_dir }}"
+        patterns: "{{ json_pattern }}"
+        recurse: no
+        file_type: file
+      register: json_reports
+
+    - name: Fail if JSON missing
+      fail:
+        msg: "❌ No sysinfo_report_*.json found in {{ report_dir }}"
+      when: json_reports.files | length == 0
+
+    - name: Get newest JSON path
+      set_fact:
+        latest_json: "{{ (json_reports.files | sort(attribute='mtime') | last).path }}"
+
+    - name: Read JSON file
+      slurp:
+        src: "{{ latest_json }}"
+      register: json_data
+
+    - name: Show JSON content
+      debug:
+        msg: |
+          ✅ Found JSON: {{ latest_json }}
+          ---- JSON Content Start ----
+          {{ json_data.content | b64decode | from_json | to_nice_json }}
+          ---- JSON Content End ----
