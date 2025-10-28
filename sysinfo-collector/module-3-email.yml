@@ -131,8 +131,8 @@
     json_file: "/tmp/sysinfo_report_{{ report_timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    mail_to: "dhanushkumar.rb@fcsonline.co.in"               # 👈 replace with your email
-    mail_from: "{{ smtp_user }}"                  # injected from AWX credential
+    mail_to: "dhanushkumar.rb@fcsonline.co.in"               # 👈 change to your desired recipient
+    mail_from: "{{ smtp_user }}"
     subject: "AWX Sysinfo Report - {{ report_timestamp }}"
 
   tasks:
@@ -152,13 +152,13 @@
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
 
-        - name: Write CSV report
+        - name: Write CSV report (with quoted RAM_Slots)
           copy:
             dest: "{{ csv_file }}"
             content: |
               Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
               {% for i in data_list %}
-              {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+              {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},"{{ i.ram_slots }}",{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
               {% endfor %}
 
         - name: Display file paths
@@ -188,7 +188,7 @@
         password = "{{ smtp_pass }}"
         receiver_email = "{{ mail_to }}"
         subject = "{{ subject }}"
-        body = "Attached are the latest system reports collected by AWX.\n\nRegards,\nAWX Sysinfo Collector"
+        body = "Attached are the latest system reports collected by AWX generated on {{ report_timestamp }}.\n\nRegards,\nansible team"
 
         msg = MIMEMultipart()
         msg["From"] = sender_email
