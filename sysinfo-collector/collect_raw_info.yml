@@ -9,17 +9,17 @@
   vars:
     probe_commands:
       - { name: "which_dmidecode", cmd: "which dmidecode" }
-      - { name: "dmidecode_full",   cmd: "dmidecode -t memory" }
-      - { name: "lsblk_bytes",      cmd: "lsblk -b -o NAME,SIZE,ROTA,TYPE" }
-      - { name: "lsblk_human",      cmd: "lsblk -o NAME,SIZE,ROTA,TYPE" }
-      - { name: "blkid",            cmd: "blkid" }
-      - { name: "cat_fstab",        cmd: "cat /etc/fstab" }
+      - { name: "dmidecode_full", cmd: "dmidecode -t memory" }
+      - { name: "lsblk_bytes", cmd: "lsblk -b -o NAME,SIZE,ROTA,TYPE" }
+      - { name: "lsblk_human", cmd: "lsblk -o NAME,SIZE,ROTA,TYPE" }
+      - { name: "blkid", cmd: "blkid" }
+      - { name: "cat_fstab", cmd: "cat /etc/fstab" }
       - { name: "cat_proc_meminfo", cmd: "cat /proc/meminfo" }
-      - { name: "sys_block_rot",    cmd: "for d in /sys/block/*; do [ -f \"$d/queue/rotational\" ] && echo \"$(basename $d):$(cat $d/queue/rotational 2>/dev/null)\"; done" }
-      - { name: "ansible_devices",  cmd: "python3 - <<'PY'\nimport json,sys\nfrom ansible.module_utils._text import to_text\n# Print ansible_devices from environment facts if present\ntry:\n  import os, json\n  # ansible_facts are not available in remote shell; this is placeholder\n  print('Note: ansible_devices is available as an Ansible fact in the playbook (see registered var).')\nexcept Exception as e:\n  print('ERROR', e)\nPY" }
+      - { name: "sys_block_rot", cmd: "for d in /sys/block/*; do [ -f \"$d/queue/rotational\" ] && echo \"$(basename $d):$(cat $d/queue/rotational 2>/dev/null)\"; done" }
 
   tasks:
-    - name: Show basic gathered Ansible facts keys (short)
+
+    - name: Show basic gathered Ansible facts
       debug:
         msg:
           - "inventory_hostname: {{ inventory_hostname }}"
@@ -42,36 +42,31 @@
 
     - name: Combine probe results into structured dict
       set_fact:
-        raw_probe: >-
-          {{
-            dict(
-              probe_results.results | map(attribute='item.name') | list,
-              probe_results.results | map(attribute='stdout') | list
-            )
-          }}
+        raw_probe: "{{ dict(probe_results.results | map(attribute='item.name') | list | zip(probe_results.results | map(attribute='stdout') | list)) }}"
 
-    - name: Debug: raw probe results (dmidecode, lsblk, /sys/block, etc.)
+    - name: Debug raw probe results (dmidecode, lsblk, /sys/block, etc.)
       debug:
         var: raw_probe
 
-    - name: Debug: full ansible_devices fact (for reference)
+    - name: Debug ansible_devices fact
       debug:
         var: ansible_devices
       when: ansible_devices is defined
 
-    - name: Debug: full ansible_mounts fact (for reference)
+    - name: Debug ansible_mounts fact
       debug:
         var: ansible_mounts
       when: ansible_mounts is defined
 
-    - name: Debug: full ansible_local facts (if any)
+    - name: Debug ansible_local facts (if any)
       debug:
         var: ansible_local
       when: ansible_local is defined
 
-    - name: Print a clear separator and instructions
+    - name: Print instructions
       debug:
         msg: |
           === END OF RAW OUTPUT ===
-          Copy the above "raw_probe", "ansible_devices" and "ansible_mounts" sections and paste them back here.
-          I will use them to craft robust parsing tasks that produce the CSV and email.
+          Copy the above "raw_probe", "ansible_devices", and "ansible_mounts" sections
+          from the job log and paste them here.
+          We'll use those real outputs to build a precise parser and CSV exporter.
