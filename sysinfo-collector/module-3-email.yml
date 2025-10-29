@@ -112,9 +112,9 @@
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    smtp_user: "{{ email_username }}"    # AWX credential
-    smtp_pass: "{{ email_password }}"    # AWX credential
-    mail_to: "{{ email_username }}"      # send to same mailbox
+    smtp_user: "{{ smtp_user }}"
+    smtp_pass: "{{ smtp_pass }}"
+    mail_to: "{{ smtp_user }}"
 
   tasks:
     - name: Ensure report directory exists
@@ -190,3 +190,4 @@
       args:
         executable: /bin/bash
       run_once: true
+
