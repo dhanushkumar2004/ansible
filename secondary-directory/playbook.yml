@@ -15,17 +15,22 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Report AppArmor installation status
+    - name: Set installation status fact
+      set_fact:
+        apparmor_installed: "{{ 'Yes' if apparmor_pkg.rc == 0 else 'No' }}"
+
+    - name: Report installation status
       debug:
         msg: >
-          {% if apparmor_pkg.rc == 0 %}
+          {% if apparmor_installed == 'Yes' %}
             ✅ AppArmor installation policy satisfied (package found)
           {% else %}
             ❌ AppArmor installation policy NOT satisfied (package missing)
           {% endif %}
 
+
     ####################################################################
-    # 2️⃣ Ensure AppArmor is enabled in the bootloader (kernel runtime check)
+    # 2️⃣ Check if AppArmor is enabled in the kernel
     ####################################################################
     - name: Check if AppArmor is enabled in kernel
       command: cat /sys/module/apparmor/parameters/enabled
@@ -33,17 +38,22 @@
       ignore_errors: true
       changed_when: false
 
+    - name: Set kernel enablement fact
+      set_fact:
+        apparmor_enabled: "{{ 'Yes' if kernel_enabled.stdout.strip() == 'Y' else 'No' }}"
+
     - name: Report AppArmor kernel enablement status
       debug:
         msg: >
-          {% if kernel_enabled.stdout.strip() == 'Y' %}
+          {% if apparmor_enabled == 'Yes' %}
             ✅ AppArmor is enabled in the kernel (policy satisfied)
           {% else %}
             ❌ AppArmor is NOT enabled in the kernel (policy NOT satisfied)
           {% endif %}
 
+
     ####################################################################
-    # 3️⃣ Ensure all AppArmor profiles are in enforce or complain mode
+    # 3️⃣ Check AppArmor profile status (enforce, complain, disabled)
     ####################################################################
     - name: Check AppArmor profile status
       command: aa-status
@@ -51,30 +61,54 @@
       ignore_errors: true
       changed_when: false
 
+    - name: Extract profile counts
+      set_fact:
+        total_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1')) | default('0') | int }}"
+        enforce_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1')) | default('0') | int }}"
+        complain_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in complain mode', '\\1')) | default('0') | int }}"
+        disabled_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are disabled', '\\1')) | default('0') | int }}"
+
     - name: Report profiles enforce/complain mode
       debug:
         msg: >
-          {% if 'profiles are loaded' in aa_status.stdout and 'profiles are disabled' not in aa_status.stdout %}
-            ✅ All AppArmor profiles are in enforce or complain mode (policy satisfied)
-          {% elif '0 profiles are disabled' in aa_status.stdout %}
+          {% if total_profiles > 0 and disabled_total == 0 %}
             ✅ All AppArmor profiles are in enforce or complain mode (policy satisfied)
           {% else %}
             ❌ Some AppArmor profiles are disabled (policy NOT satisfied)
           {% endif %}
 
+
     ####################################################################
     # 4️⃣ Ensure all AppArmor profiles are enforcing
     ####################################################################
-    - name: Extract enforce and total profile counts
+    - name: Set enforcement status fact
       set_fact:
-        enforce_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1')) | default('0') | int }}"
-        total_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1')) | default('0') | int }}"
+        all_enforcing: "{{ 'Yes' if (enforce_total == total_profiles and total_profiles > 0) else 'No' }}"
 
     - name: Report enforcement status
       debug:
         msg: >
-          {% if enforce_total == total_profiles and total_profiles > 0 %}
+          {% if all_enforcing == 'Yes' %}
             ✅ All AppArmor profiles are enforcing (policy satisfied)
           {% else %}
             ❌ Not all AppArmor profiles are enforcing (policy NOT satisfied)
           {% endif %}
+
+
+    ####################################################################
+    # 5️⃣ Final Summary Report
+    ####################################################################
+    - name: Display AppArmor Compliance Summary
+      debug:
+        msg: |
+          ================== AppArmor Compliance Summary ==================
+          AppArmor Installed:               {{ apparmor_installed }}
+          AppArmor Enabled in Kernel:       {{ apparmor_enabled }}
+          ------------------------------------------------------------------
+          Total Profiles Loaded:            {{ total_profiles }}
+          Profiles Enforcing:               {{ enforce_total }}
+          Profiles in Complain Mode:        {{ complain_total }}
+          Profiles Disabled:                {{ disabled_total }}
+          ------------------------------------------------------------------
+          All Profiles Enforcing:           {{ all_enforcing }}
+          ==================================================================
