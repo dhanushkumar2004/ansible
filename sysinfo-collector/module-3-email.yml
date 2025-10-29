@@ -1,6 +1,6 @@
 ---
 # ==========================================================
-# MODULE 1 - Collect system info from all hosts
+# MODULE 1 - Collect system info from all Ubuntu hosts
 # ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
@@ -10,6 +10,9 @@
   become_method: sudo
 
   tasks:
+    ####################################################################
+    # --- REQUIRED TOOLS -----------------------------------------------
+    ####################################################################
     - name: Ensure required packages are installed
       block:
         - name: Check if required binaries exist
@@ -34,17 +37,23 @@
             DEBIAN_FRONTEND: noninteractive
           when: >
             not (pkg_binaries.results
-                 | selectattr('stat.exists','equalto',true)
+                 | selectattr('stat.exists', 'equalto', true)
                  | list | length == 3)
       rescue:
         - debug:
             msg: "⚠️ Package install failed; continuing with available tools."
 
+    ####################################################################
+    # --- CPU INFO -----------------------------------------------------
+    ####################################################################
     - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
+    ####################################################################
+    # --- MEMORY INFO --------------------------------------------------
+    ####################################################################
     - name: Get RAM slot usage and memory type
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
@@ -57,6 +66,9 @@
       args:
         executable: /bin/bash
 
+    ####################################################################
+    # --- STORAGE INFO -------------------------------------------------
+    ####################################################################
     - name: Get storage devices and classify
       shell: |
         total=0
@@ -74,7 +86,10 @@
       args:
         executable: /bin/bash
 
-    - name: Save structured sysinfo fact
+    ####################################################################
+    # --- SAVE SYSINFO FACT -------------------------------------------
+    ####################################################################
+    - name: Save structured system info fact
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
@@ -85,6 +100,9 @@
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
           drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
+    ####################################################################
+    # --- DISPLAY SUMMARY ----------------------------------------------
+    ####################################################################
     - name: Display concise system summary
       debug:
         msg: |
@@ -102,7 +120,6 @@
 - name: Aggregate and save reports on trusted host
   hosts: all
   gather_facts: false
-  become: false
   run_once: true
   delegate_to: 192.168.2.129
 
@@ -113,13 +130,13 @@
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
   tasks:
-    - name: Ensure report directory exists on trusted host
+    - name: Ensure report directory exists
       file:
         path: "{{ report_dir }}"
         state: directory
         mode: '0755'
 
-    - name: Build aggregated data list
+    - name: Build data list from all hosts
       set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
@@ -129,7 +146,7 @@
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
-    - name: Write CSV report (RAM slots formatted properly)
+    - name: Write CSV report with proper slot formatting
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -139,9 +156,9 @@
           {% endfor %}
         mode: '0644'
 
-    - name: Display file locations
+    - name: Display generated file locations
       debug:
         msg: |
-          ✅ Reports successfully generated on trusted host:
+          ✅ Reports successfully created on 192.168.2.129:
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
