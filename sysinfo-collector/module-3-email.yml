@@ -1,9 +1,8 @@
 ---
 # ==========================================================
-# AWX System Info Collector & Mailer (Trusted Host Version)
+# MODULE 1 - Collect system info from all Ubuntu hosts
 # ==========================================================
-
-- name: Collect detailed system info from all Ubuntu hosts
+- name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
   become: yes
@@ -58,7 +57,7 @@
     ####################################################################
     # --- MEMORY INFO --------------------------------------------------
     ####################################################################
-    - name: Get RAM slot usage and memory type from dmidecode
+    - name: Get RAM slot usage and memory type from dmidecode (robust)
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
@@ -119,49 +118,46 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate results and send email (delegated)
+# MODULE 2 - Aggregate results and send via trusted host
 # ==========================================================
-- name: Aggregate reports and send via trusted host
-  hosts: all
+- name: Aggregate reports and send email from trusted host
+  hosts: 192.168.2.129
   gather_facts: no
-  become: true
-  become_user: dhanushkumar.rb
-  run_once: true
+  become: yes
+  become_user: "{{ report_user }}"   # 👈 CHANGE THIS USERNAME (e.g., 'dhanushkumar.rb')
+  become_method: sudo
 
   vars:
-    report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
-    report_dir: "/home/dhanushkumar.rb/hosts-info-ansible"
-    csv_file: "{{ report_dir }}/sysinfo_report_{{ report_timestamp }}.csv"
-    json_file: "{{ report_dir }}/sysinfo_report_{{ report_timestamp }}.json"
+    report_user: "ansibleadmin"   # 👈 Replace with your username
+    report_dir: "/home/{{ report_user }}/hosts-info-ansible"
+    timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
+    json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
+    mail_from: "{{ smtp_user }}"
     mail_to: "recipient@domain.com"
-    subject: "AWX Sysinfo Report - {{ report_timestamp }}"
+    subject: "AWX Sysinfo Report - {{ timestamp }}"
 
   tasks:
+    - name: Ensure report directory exists
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: '0755'
 
-    - name: Aggregate and email from trusted host
-      delegate_to: 192.168.2.129
-      become_user: dhanushkumar.rb
+    - name: Aggregate data and generate reports
+      delegate_to: localhost
+      run_once: true
+      vars:
+        data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
       block:
-
-        - name: Ensure report directory exists
-          file:
-            path: "{{ report_dir }}"
-            state: directory
-            mode: '0755'
-
-        - name: Aggregate data for report
-          set_fact:
-            data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
-
         - name: Write JSON report
           copy:
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
-            mode: '0644'
 
-        - name: Write CSV report
+        - name: Write CSV report (escaped for WPS)
           copy:
             dest: "{{ csv_file }}"
             content: |
@@ -169,66 +165,51 @@
               {% for i in data_list %}
               "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
               {% endfor %}
-            mode: '0644'
 
-        - name: Confirm reports exist before mailing
-          stat:
-            path: "{{ item }}"
-          loop:
-            - "{{ csv_file }}"
-            - "{{ json_file }}"
-          register: report_files
-
-        - name: Verify file presence
-          fail:
-            msg: "File {{ item.stat.path }} not found on {{ inventory_hostname }}!"
-          when: not item.stat.exists
-          loop: "{{ report_files.results }}"
-
-        - name: Display generated file names
+        - name: Display generated report files
           debug:
             msg: |
-              ✅ Reports generated on {{ inventory_hostname }}:
-              📄 CSV: {{ csv_file }}
-              📄 JSON: {{ json_file }}
+              ✅ Reports generated:
+              CSV: {{ csv_file }}
+              JSON: {{ json_file }}
 
-        - name: Send email with attachments (Python)
-          shell: |
-            python3 - <<'EOF'
-            import smtplib, ssl, os
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            from email.mime.base import MIMEBase
-            from email import encoders
+    - name: Send email with attachments
+      shell: |
+        python3 - <<'EOF'
+        import smtplib, ssl, os
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.base import MIMEBase
+        from email import encoders
 
-            sender = "{{ smtp_user }}"
-            password = "{{ smtp_pass }}"
-            recipient = "{{ mail_to }}"
-            ts = "{{ report_timestamp }}"
-            body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
-            subject = "{{ subject }}"
+        sender = "{{ smtp_user }}"
+        password = "{{ smtp_pass }}"
+        recipient = "{{ mail_to }}"
+        ts = "{{ timestamp }}"
+        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
+        subject = "AWX Sysinfo Report - " + ts
 
-            msg = MIMEMultipart()
-            msg["From"] = sender
-            msg["To"] = recipient
-            msg["Subject"] = subject
-            msg.attach(MIMEText(body, "plain"))
+        msg = MIMEMultipart()
+        msg["From"] = sender
+        msg["To"] = recipient
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
 
-            for path in ["{{ csv_file }}", "{{ json_file }}"]:
+        for path in ["{{ csv_file }}", "{{ json_file }}"]:
+            if os.path.exists(path):
                 with open(path, "rb") as f:
-                    part = MIMEBase("application","octet-stream")
+                    part = MIMEBase("application", "octet-stream")
                     part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
-                msg.attach(part)
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
+                    msg.attach(part)
 
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
-                server.starttls(context=ctx)
-                server.login(sender, password)
-                server.sendmail(sender, recipient, msg.as_string())
-
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
+            server.starttls(context=ctx)
+            server.login(sender, password)
+            server.sendmail(sender, recipient, msg.as_string())
             print(f"📧 Email sent successfully to {recipient}")
-            EOF
-          args:
-            executable: /bin/bash
+        EOF
+      args:
+        executable: /bin/bash
