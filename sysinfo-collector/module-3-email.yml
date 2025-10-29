@@ -1,7 +1,7 @@
 ---
-# AWX Sysinfo Collector — generate JSON + CSV on trusted host only (no email)
-
-# 1) Collect system info from all hosts (unchanged)
+# ==========================================================
+# MODULE 1 - Collect system info from all hosts
+# ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -96,38 +96,40 @@
           💽 Drives: {{ collected_sysinfo.drives }}
 
 
-# 2) Aggregate and write reports on trusted host only (no emailing)
-- name: Generate JSON + CSV reports on trusted host (no email)
-  hosts: 192.168.2.129
-  gather_facts: yes                     # needed to resolve ansible_env.HOME correctly
-  become: false                         # run as the SSH user AWX connects with
-  connection: ssh
+# ==========================================================
+# MODULE 2 - Aggregate and save reports on trusted host
+# ==========================================================
+- name: Aggregate and save reports on trusted host
+  hosts: all
+  gather_facts: false
+  become: false
   run_once: true
+  delegate_to: 192.168.2.129
 
   vars:
-    report_dir: "{{ ansible_env.HOME }}/hosts-info-ansible"
+    report_dir: "~/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
   tasks:
-    - name: Ensure report directory exists (on trusted host)
+    - name: Ensure report directory exists on trusted host
       file:
         path: "{{ report_dir }}"
         state: directory
         mode: '0755'
 
-    - name: Build aggregated data_list from collected facts
+    - name: Build aggregated data list
       set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
-    - name: Write JSON report (on trusted host)
+    - name: Write JSON report
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
-    - name: Write CSV report (RAM slots as 'X of Y' to avoid date parsing)
+    - name: Write CSV report (RAM slots formatted properly)
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -137,17 +139,9 @@
           {% endfor %}
         mode: '0644'
 
-    - name: Ensure reports are readable
-      file:
-        path: "{{ item }}"
-        mode: '0644'
-      loop:
-        - "{{ csv_file }}"
-        - "{{ json_file }}"
-
-    - name: Display created report locations (trusted host)
+    - name: Display file locations
       debug:
         msg: |
-          ✅ Reports written on {{ inventory_hostname }}:
+          ✅ Reports successfully generated on trusted host:
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
