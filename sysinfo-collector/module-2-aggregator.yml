@@ -99,30 +99,21 @@
 # ==========================================================
 # MODULE 2 - Aggregate & Save Reports on Trusted Host
 # ==========================================================
-- name: Aggregate and save reports on trusted host (as SSH user)
+- name: Aggregate and save reports on trusted host (manual home path)
   hosts: all
   gather_facts: false
   run_once: true
   become: false
 
   vars:
-    trusted_host: 192.168.2.129
+    trusted_host: 192.168.2.129        # 🔧 <-- enter your trusted host IP here
+    remote_home: "/home/ansibleadmin"       # 🔧 <-- enter your home path here
     timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
+    report_dir: "{{ remote_home }}/hosts-info-ansible"
+    csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
+    json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
   tasks:
-    - name: Determine SSH user's home directory on trusted host
-      delegate_to: "{{ trusted_host }}"
-      shell: "echo $HOME"
-      register: remote_home_cmd
-      changed_when: false
-
-    - name: Set report paths based on SSH user's home
-      set_fact:
-        remote_home: "{{ remote_home_cmd.stdout | trim }}"
-        report_dir: "{{ remote_home }}/hosts-info-ansible"
-        csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
-        json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
-
     - name: Ensure report directory exists
       delegate_to: "{{ trusted_host }}"
       file:
