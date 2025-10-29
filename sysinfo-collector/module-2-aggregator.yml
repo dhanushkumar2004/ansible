@@ -103,14 +103,15 @@
   hosts: all
   gather_facts: false
   run_once: true
-  delegate_to: 192.168.2.129
   become: false
 
   vars:
+    trusted_host: 192.168.2.129
     timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
 
   tasks:
     - name: Determine SSH user's home directory on trusted host
+      delegate_to: "{{ trusted_host }}"
       shell: "echo $HOME"
       register: remote_home_cmd
       changed_when: false
@@ -119,10 +120,11 @@
       set_fact:
         remote_home: "{{ remote_home_cmd.stdout | trim }}"
         report_dir: "{{ remote_home }}/hosts-info-ansible"
-        csv_file: "{{ remote_home }}/hosts-info-ansible/sysinfo_report_{{ timestamp }}.csv"
-        json_file: "{{ remote_home }}/hosts-info-ansible/sysinfo_report_{{ timestamp }}.json"
+        csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
+        json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
     - name: Ensure report directory exists
+      delegate_to: "{{ trusted_host }}"
       file:
         path: "{{ report_dir }}"
         state: directory
@@ -133,12 +135,14 @@
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
     - name: Write JSON report on trusted host
+      delegate_to: "{{ trusted_host }}"
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
     - name: Write CSV report on trusted host
+      delegate_to: "{{ trusted_host }}"
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -149,6 +153,7 @@
         mode: '0644'
 
     - name: Final confirmation
+      delegate_to: "{{ trusted_host }}"
       debug:
         msg: |
           ✅ Reports saved on trusted host (as SSH user):
