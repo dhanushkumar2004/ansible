@@ -118,15 +118,14 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate results and send email from trusted host
+# MODULE 2 - Aggregate results and send email (delegated)
 # ==========================================================
-- name: Aggregate reports and send email from trusted host
+- name: Aggregate reports and send via trusted host
   hosts: all
   gather_facts: no
   become: true
   become_user: root
   run_once: true
-  delegate_to: 192.168.2.129
 
   vars:
     report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
@@ -135,19 +134,22 @@
     json_file: "{{ report_dir }}/sysinfo_report_{{ report_timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    mail_to: "dhanushkumar.rb@fcsonline.co.in"
+    mail_to: "recipient@domain.com"
     subject: "AWX Sysinfo Report - {{ report_timestamp }}"
 
   tasks:
-    - name: Ensure report directory exists
-      file:
-        path: "{{ report_dir }}"
-        state: directory
-        mode: '0755'
 
-    - name: Write reports locally on trusted host
+    - name: Aggregate and email from trusted host
+      delegate_to: 192.168.2.129
       block:
-        - name: Aggregate system data
+
+        - name: Ensure report directory exists
+          file:
+            path: "{{ report_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: Aggregate data for report
           set_fact:
             data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
@@ -168,47 +170,47 @@
         - name: Display generated file names
           debug:
             msg: |
-              ✅ Reports generated on {{ inventory_hostname }}:
+              ✅ Reports generated:
               📄 CSV: {{ csv_file }}
               📄 JSON: {{ json_file }}
 
-    - name: Send email with attachments (via Python)
-      shell: |
-        python3 - <<'EOF'
-        import smtplib, ssl, os
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.base import MIMEBase
-        from email import encoders
+        - name: Send email with attachments (Python)
+          shell: |
+            python3 - <<'EOF'
+            import smtplib, ssl, os
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
 
-        sender = "{{ smtp_user }}"
-        password = "{{ smtp_pass }}"
-        recipient = "{{ mail_to }}"
-        ts = "{{ report_timestamp }}"
-        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
-        subject = "{{ subject }}"
+            sender = "{{ smtp_user }}"
+            password = "{{ smtp_pass }}"
+            recipient = "{{ mail_to }}"
+            ts = "{{ report_timestamp }}"
+            body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
+            subject = "{{ subject }}"
 
-        msg = MIMEMultipart()
-        msg["From"] = sender
-        msg["To"] = recipient
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
+            msg = MIMEMultipart()
+            msg["From"] = sender
+            msg["To"] = recipient
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain"))
 
-        for path in ["{{ csv_file }}", "{{ json_file }}"]:
-            with open(path, "rb") as f:
-                part = MIMEBase("application","octet-stream")
-                part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
-            msg.attach(part)
+            for path in ["{{ csv_file }}", "{{ json_file }}"]:
+                with open(path, "rb") as f:
+                    part = MIMEBase("application","octet-stream")
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
+                msg.attach(part)
 
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
-            server.starttls(context=ctx)
-            server.login(sender, password)
-            server.sendmail(sender, recipient, msg.as_string())
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
+                server.starttls(context=ctx)
+                server.login(sender, password)
+                server.sendmail(sender, recipient, msg.as_string())
 
-        print(f"📧 Email sent successfully to {recipient}")
-        EOF
-      args:
-        executable: /bin/bash
+            print(f"📧 Email sent successfully to {recipient}")
+            EOF
+          args:
+            executable: /bin/bash
