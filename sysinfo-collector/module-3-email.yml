@@ -103,6 +103,9 @@
 # ==========================================================
 # MODULE 2 - Aggregate + Send Mail
 # ==========================================================
+# ==========================================================
+# MODULE 2 - Aggregate + Send Mail (verified attachments)
+# ==========================================================
 - name: Aggregate reports and email from trusted host (as SSH user)
   hosts: 192.168.2.129
   gather_facts: no
@@ -110,14 +113,15 @@
   run_once: true
 
   vars:
-    report_dir: "~/hosts-info-ansible"
+    home_dir: "{{ lookup('env','HOME') }}"
+    report_dir: "{{ home_dir }}/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
     mail_from: "{{ smtp_user }}"
-    mail_to: "{{ smtp_user }}"        # same email from AWX credential
+    mail_to: "{{ smtp_user }}"
     subject: "AWX Sysinfo Report - {{ timestamp }}"
 
   tasks:
@@ -127,7 +131,7 @@
         state: directory
         mode: '0755'
 
-    - name: Build aggregated data
+    - name: Aggregate collected host data
       set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
@@ -137,7 +141,7 @@
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
-    - name: Write CSV report on trusted host (fix 2/4 → 2 of 4)
+    - name: Write CSV report on trusted host (2 of 4 fix)
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -147,22 +151,17 @@
           {% endfor %}
         mode: '0644'
 
-    - name: Confirm files exist on host
-      stat:
-        path: "{{ item }}"
-      loop:
-        - "{{ csv_file }}"
-        - "{{ json_file }}"
-      register: files
+    - name: Verify that reports exist and show details
+      shell: |
+        echo "Verifying reports in {{ report_dir }}"
+        ls -lh {{ csv_file }} {{ json_file }} || echo "Files not found"
+      register: verify
+      changed_when: false
 
-    - name: Display report file locations
-      debug:
-        msg: |
-          ✅ Reports generated on {{ inventory_hostname }}:
-          CSV: {{ csv_file }}
-          JSON: {{ json_file }}
+    - debug:
+        var: verify.stdout_lines
 
-    - name: Send email with CSV + JSON attachments
+    - name: Send email with verified CSV + JSON attachments
       shell: |
         python3 - <<'PY'
         import smtplib, ssl, os
@@ -175,25 +174,29 @@
         password = "{{ smtp_pass }}"
         recipient = "{{ smtp_user }}"
         ts = "{{ timestamp }}"
-        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
-        subject = "AWX Sysinfo Report - " + ts
+        csv_path = os.path.expanduser("{{ csv_file }}")
+        json_path = os.path.expanduser("{{ json_file }}")
+
+        print(f"📦 Preparing to attach:\n - {csv_path}\n - {json_path}")
 
         msg = MIMEMultipart()
         msg["From"] = sender
         msg["To"] = recipient
-        msg["Subject"] = subject
+        msg["Subject"] = f"AWX Sysinfo Report - {ts}"
+        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
         msg.attach(MIMEText(body, "plain"))
 
-        for p in ["{{ csv_file }}", "{{ json_file }}"]:
-            if os.path.exists(os.path.expanduser(p)):
-                with open(os.path.expanduser(p), "rb") as f:
+        for path in [csv_path, json_path]:
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, "rb") as f:
                     part = MIMEBase("application", "octet-stream")
                     part.set_payload(f.read())
                     encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(p)}")
+                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
                     msg.attach(part)
+                    print(f"✅ Attached: {path}")
             else:
-                print(f"⚠️ File not found: {p}")
+                print(f"⚠️ Missing or empty file: {path}")
 
         ctx = ssl.create_default_context()
         with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
@@ -207,5 +210,8 @@
 
     - name: Final confirmation
       debug:
-        msg: "✅ Email sent successfully to {{ smtp_user }} with attached reports: {{ csv_file }} and {{ json_file }}"
-
+        msg: |
+          ✅ Email sent to {{ smtp_user }}
+          Files used:
+            - {{ csv_file }}
+            - {{ json_file }}
