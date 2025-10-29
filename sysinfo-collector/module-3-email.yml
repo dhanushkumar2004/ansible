@@ -1,7 +1,8 @@
 ---
 # ==========================================================
-# AWX System Info Collector & Mailer
+# AWX System Info Collector & Mailer (Trusted Host Version)
 # ==========================================================
+
 - name: Collect detailed system info from all Ubuntu hosts
   hosts: all
   gather_facts: yes
@@ -124,7 +125,7 @@
   hosts: all
   gather_facts: no
   become: true
-  become_user: root
+  become_user: dhanushkumar.rb
   run_once: true
 
   vars:
@@ -141,6 +142,7 @@
 
     - name: Aggregate and email from trusted host
       delegate_to: 192.168.2.129
+      become_user: dhanushkumar.rb
       block:
 
         - name: Ensure report directory exists
@@ -148,6 +150,8 @@
             path: "{{ report_dir }}"
             state: directory
             mode: '0755'
+            owner: dhanushkumar.rb
+            group: dhanushkumar.rb
 
         - name: Aggregate data for report
           set_fact:
@@ -157,6 +161,9 @@
           copy:
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
+            owner: dhanushkumar.rb
+            group: dhanushkumar.rb
+            mode: '0644'
 
         - name: Write CSV report
           copy:
@@ -166,11 +173,28 @@
               {% for i in data_list %}
               "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
               {% endfor %}
+            owner: dhanushkumar.rb
+            group: dhanushkumar.rb
+            mode: '0644'
+
+        - name: Confirm reports exist before mailing
+          stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ csv_file }}"
+            - "{{ json_file }}"
+          register: report_files
+
+        - name: Verify file presence
+          fail:
+            msg: "File {{ item.stat.path }} not found on {{ inventory_hostname }}!"
+          when: not item.stat.exists
+          loop: "{{ report_files.results }}"
 
         - name: Display generated file names
           debug:
             msg: |
-              ✅ Reports generated:
+              ✅ Reports generated on {{ inventory_hostname }}:
               📄 CSV: {{ csv_file }}
               📄 JSON: {{ json_file }}
 
