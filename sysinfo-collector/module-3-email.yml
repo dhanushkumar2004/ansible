@@ -1,6 +1,6 @@
 ---
 # ==========================================================
-# MODULE 1 - Collect system info from all Ubuntu hosts
+# Collect facts on all hosts (module 1) — unchanged
 # ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
@@ -10,9 +10,6 @@
   become_method: sudo
 
   tasks:
-    ####################################################################
-    # --- REQUIRED TOOLS -----------------------------------------------
-    ####################################################################
     - name: Ensure required packages are installed
       block:
         - name: Check if required binaries exist
@@ -37,23 +34,17 @@
             DEBIAN_FRONTEND: noninteractive
           when: >
             not (pkg_binaries.results
-                 | selectattr('stat.exists', 'equalto', true)
+                 | selectattr('stat.exists','equalto',true)
                  | list | length == 3)
       rescue:
         - debug:
-            msg: "⚠️ Package install failed; continuing with available tools."
+            msg: "⚠️ Package install failed; continuing."
 
-    ####################################################################
-    # --- CPU INFO -----------------------------------------------------
-    ####################################################################
     - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
-    ####################################################################
-    # --- MEMORY INFO --------------------------------------------------
-    ####################################################################
     - name: Get RAM slot usage and memory type
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
@@ -66,9 +57,6 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- STORAGE INFO -------------------------------------------------
-    ####################################################################
     - name: Get storage devices and classify
       shell: |
         total=0
@@ -86,10 +74,7 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- SAVE SYSINFO FACT -------------------------------------------
-    ####################################################################
-    - name: Save structured system info fact
+    - name: Save structured sysinfo fact
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
@@ -100,9 +85,6 @@
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
           drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
-    ####################################################################
-    # --- DISPLAY SUMMARY ----------------------------------------------
-    ####################################################################
     - name: Display concise system summary
       debug:
         msg: |
@@ -115,38 +97,50 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate and save reports on trusted host
+# MODULE 2 - Aggregate & save reports on trusted host (as SSH user)
 # ==========================================================
-- name: Aggregate and save reports on trusted host
+- name: Aggregate and save reports on trusted host (as SSH user)
   hosts: all
   gather_facts: false
   run_once: true
   delegate_to: 192.168.2.129
+  become: false
 
   vars:
-    report_dir: "~/hosts-info-ansible"
-    timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    # we'll compute remote_home below by running 'echo $HOME' on the trusted host
+    report_dir: "{{ remote_home }}/hosts-info-ansible"
+    timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
   tasks:
-    - name: Ensure report directory exists
+    - name: Determine SSH user's home on trusted host
+      # runs on 192.168.2.129 because of delegate_to at play level
+      shell: "echo $HOME"
+      register: remote_home_cmd
+      changed_when: false
+
+    - name: Set remote_home fact
+      set_fact:
+        remote_home: "{{ remote_home_cmd.stdout | default('/home/ansible') }}"
+
+    - name: Ensure report directory exists on trusted host (owned by SSH user)
       file:
         path: "{{ report_dir }}"
         state: directory
         mode: '0755'
 
-    - name: Build data list from all hosts
+    - name: Build data list from collected facts (all hosts)
       set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
-    - name: Write JSON report
+    - name: Write JSON report on trusted host
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
-    - name: Write CSV report with proper slot formatting
+    - name: Write CSV report on trusted host (format RAM slots X of Y)
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -156,9 +150,17 @@
           {% endfor %}
         mode: '0644'
 
-    - name: Display generated file locations
+    - name: Ensure reports are readable (adjust perms, will keep owner = SSH user)
+      file:
+        path: "{{ item }}"
+        mode: '0644'
+      loop:
+        - "{{ csv_file }}"
+        - "{{ json_file }}"
+
+    - name: Final debug — show where files are saved (trusted host)
       debug:
         msg: |
-          ✅ Reports successfully created on 192.168.2.129:
+          ✅ Reports written on trusted host (as SSH user):
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
