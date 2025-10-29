@@ -1,7 +1,8 @@
 ---
 # ==========================================================
-# MODULE 1 - Collect system info from all Ubuntu hosts
+# AWX Sysinfo Collector + Email (runs as SSH user)
 # ==========================================================
+
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -10,9 +11,8 @@
   become_method: sudo
 
   tasks:
-
     ####################################################################
-    # --- REQUIRED TOOLS (Robust Install) ------------------------------
+    # --- REQUIRED TOOLS ----------------------------------------------
     ####################################################################
     - name: Ensure required packages are installed (robust and safe)
       block:
@@ -26,7 +26,7 @@
             - /usr/bin/lsb_release
           changed_when: false
 
-        - name: Installing tools if missing (quiet mode)
+        - name: Install missing tools
           apt:
             name:
               - dmidecode
@@ -34,30 +34,23 @@
               - lsb-release
             state: present
             update_cache: yes
-            force_apt_get: yes
           environment:
             DEBIAN_FRONTEND: noninteractive
           when: >
-            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
-          async: 180
-          poll: 10
-
+            not (pkg_binaries.results | selectattr('stat.exists','equalto',true) | list | length == 3)
       rescue:
         - debug:
-            msg: "⚠️ Package installation failed or timed out; continuing with available tools."
+            msg: "⚠️ Package install failed; continuing with available tools."
 
     ####################################################################
-    # --- CPU INFO -----------------------------------------------------
+    # --- CPU, RAM, and Storage Collection -----------------------------
     ####################################################################
-    - name: Get CPU model name
+    - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
-    ####################################################################
-    # --- MEMORY INFO --------------------------------------------------
-    ####################################################################
-    - name: Get RAM slot usage and memory type from dmidecode (robust)
+    - name: Get RAM slot usage and memory type
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
@@ -69,10 +62,7 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- STORAGE INFO -------------------------------------------------
-    ####################################################################
-    - name: Collect block device info and classify drives
+    - name: Get storage devices and classify
       shell: |
         total=0
         out=""
@@ -89,10 +79,7 @@
       args:
         executable: /bin/bash
 
-    ####################################################################
-    # --- SAVE SYSINFO FACT -------------------------------------------
-    ####################################################################
-    - name: Save system info as structured fact
+    - name: Store system info
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
@@ -103,10 +90,7 @@
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
           drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
-    ####################################################################
-    # --- DISPLAY SUMMARY ----------------------------------------------
-    ####################################################################
-    - name: Display concise system summary
+    - name: Display system summary
       debug:
         msg: |
           🖥️ Hostname: {{ collected_sysinfo.hostname }}
@@ -118,25 +102,23 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate results and send via trusted host
+# MODULE 2 - Aggregate + Send Mail
 # ==========================================================
-- name: Aggregate reports and send email from trusted host
+- name: Aggregate reports and email from trusted host (as SSH user)
   hosts: 192.168.2.129
   gather_facts: no
-  become: yes
-  become_user: "{{ report_user }}"   # 👈 CHANGE THIS USERNAME (e.g., 'dhanushkumar.rb')
-  become_method: sudo
+  become: false
+  run_once: true
 
   vars:
-    report_user: "ansibleadmin"   # 👈 Replace with your username
-    report_dir: "/home/{{ report_user }}/hosts-info-ansible"
+    report_dir: "~/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
     mail_from: "{{ smtp_user }}"
-    mail_to: "recipient@domain.com"
+    mail_to: "{{ smtp_user }}"        # 👈 sender == receiver (from credential)
     subject: "AWX Sysinfo Report - {{ timestamp }}"
 
   tasks:
@@ -146,36 +128,36 @@
         state: directory
         mode: '0755'
 
-    - name: Aggregate data and generate reports
-      delegate_to: localhost
-      run_once: true
-      vars:
+    - name: Build aggregated data
+      set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
-      block:
-        - name: Write JSON report
-          copy:
-            dest: "{{ json_file }}"
-            content: "{{ data_list | to_nice_json }}"
 
-        - name: Write CSV report (escaped for WPS)
-          copy:
-            dest: "{{ csv_file }}"
-            content: |
-              "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
-              {% for i in data_list %}
-              "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
-              {% endfor %}
+    - name: Write JSON report
+      copy:
+        dest: "{{ json_file }}"
+        content: "{{ data_list | to_nice_json }}"
+        mode: '0644'
 
-        - name: Display generated report files
-          debug:
-            msg: |
-              ✅ Reports generated:
-              CSV: {{ csv_file }}
-              JSON: {{ json_file }}
+    - name: Write CSV report (with RAM slots formatted as "2 of 4")
+      copy:
+        dest: "{{ csv_file }}"
+        content: |
+          "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
+          {% for i in data_list %}
+          "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots | regex_replace('([0-9]+)/([0-9]+)', '\\1 of \\2') }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
+          {% endfor %}
+        mode: '0644'
 
-    - name: Send email with attachments
+    - name: Show created report paths
+      debug:
+        msg: |
+          ✅ Reports created on {{ inventory_hostname }}:
+          CSV: {{ csv_file }}
+          JSON: {{ json_file }}
+
+    - name: Send email with attached reports
       shell: |
-        python3 - <<'EOF'
+        python3 - <<'PY'
         import smtplib, ssl, os
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
@@ -184,7 +166,7 @@
 
         sender = "{{ smtp_user }}"
         password = "{{ smtp_pass }}"
-        recipient = "{{ mail_to }}"
+        recipient = "{{ smtp_user }}"
         ts = "{{ timestamp }}"
         body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
         subject = "AWX Sysinfo Report - " + ts
@@ -195,13 +177,13 @@
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
 
-        for path in ["{{ csv_file }}", "{{ json_file }}"]:
-            if os.path.exists(path):
-                with open(path, "rb") as f:
+        for p in ["{{ csv_file }}", "{{ json_file }}"]:
+            if os.path.exists(p):
+                with open(p, "rb") as f:
                     part = MIMEBase("application", "octet-stream")
                     part.set_payload(f.read())
                     encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
+                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(p)}")
                     msg.attach(part)
 
         ctx = ssl.create_default_context()
@@ -210,6 +192,10 @@
             server.login(sender, password)
             server.sendmail(sender, recipient, msg.as_string())
             print(f"📧 Email sent successfully to {recipient}")
-        EOF
+        PY
       args:
         executable: /bin/bash
+
+    - name: Final confirmation
+      debug:
+        msg: "✅ Email sent successfully to {{ smtp_user }} with reports: {{ csv_file }} and {{ json_file }}"
