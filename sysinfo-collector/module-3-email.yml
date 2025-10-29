@@ -97,27 +97,24 @@
 
 
 # ==========================================================
-# MODULE 2 — Generate reports + send email (same SSH user)
-# ==========================================================
-# ==========================================================
-# MODULE 2 — Generate reports + send email (same SSH user)
+# MODULE 2 — Generate reports + send email (trusted host)
 # ==========================================================
 - name: Generate and email reports from trusted host
   hosts: 192.168.2.129
-  gather_facts: no
+  gather_facts: yes      # needed to resolve ansible_env.HOME
   become: false
   connection: ssh
 
   vars:
-    report_dir: "~{{ ansible_user }}/hosts-info-ansible"
+    report_dir: "{{ ansible_env.HOME }}/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    smtp_user: "{{ smtp_user }}"
-    smtp_pass: "{{ smtp_pass }}"
-    mail_to: "{{ smtp_user }}"
+    smtp_user: "{{ smtp_user }}"    # injected from AWX credential
+    smtp_pass: "{{ smtp_pass }}"    # injected from AWX credential
+    mail_to: "{{ smtp_user }}"      # send to same mailbox
 
   tasks:
     - name: Ensure report directory exists
@@ -161,7 +158,7 @@
     - name: Display generated report paths
       debug:
         msg: |
-          ✅ Reports created:
+          ✅ Reports created successfully:
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
 
@@ -196,6 +193,7 @@
                 encoders.encode_base64(part)
                 part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
                 msg.attach(part)
+                print(f"✅ Attached: {path}")
             else:
                 print(f"⚠️ Missing file: {path}")
 
@@ -209,4 +207,3 @@
       args:
         executable: /bin/bash
       run_once: true
-
