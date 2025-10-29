@@ -34,7 +34,9 @@
           environment:
             DEBIAN_FRONTEND: noninteractive
           when: >
-            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
+            not (pkg_binaries.results
+                 | selectattr('stat.exists','equalto',true)
+                 | list | length == 3)
 
       rescue:
         - debug:
@@ -49,7 +51,7 @@
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
-        mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
+        mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/,"",$2); if($2!="Unknown" && $2!="") {print $2; exit}}')
         [ -z "$mem_type" ] && mem_type="Unknown"
         echo "$used_slots of $total_slots,$mem_type"
       register: ram_info
@@ -83,7 +85,7 @@
           ram_slots: "{{ (ram_info.stdout.split(',')[0]) | default('N/A') }}"
           ram_type: "{{ (ram_info.stdout.split(',')[1]) | default('Unknown') }}"
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
-          drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
+          drives: "{{ (disk_info.stdout.split(',',2)[1]) | default('N/A') }}"
 
     - name: Display concise system summary
       debug:
@@ -97,24 +99,24 @@
 
 
 # ==========================================================
-# MODULE 2 — Generate reports + send email (trusted host)
+# MODULE 2 — Generate reports + send email (on trusted host)
 # ==========================================================
 - name: Generate and email reports from trusted host
   hosts: 192.168.2.129
-  gather_facts: yes      # needed to resolve ansible_env.HOME
+  gather_facts: yes
   become: false
   connection: ssh
 
   vars:
     report_dir: "{{ ansible_env.HOME }}/hosts-info-ansible"
-    timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    smtp_user: "{{ smtp_user }}"    # injected from AWX credential
-    smtp_pass: "{{ smtp_pass }}"    # injected from AWX credential
-    mail_to: "{{ smtp_user }}"      # send to same mailbox
+    smtp_user: "{{ smtp_user }}"      # from AWX credential
+    smtp_pass: "{{ smtp_pass }}"      # from AWX credential
+    mail_to: "{{ smtp_user }}"
 
   tasks:
     - name: Ensure report directory exists
@@ -125,27 +127,27 @@
 
     - name: Aggregate system data from all hosts
       set_fact:
-        data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
+        data_list: "{{ hostvars | dict2items
+                       | map(attribute='value.collected_sysinfo')
+                       | select('defined') | list }}"
       run_once: true
 
-    - name: Write JSON report
+    - name: Write JSON report (on trusted host)
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
+      run_once: false
 
-    - name: Write CSV report
+    - name: Write CSV report (on trusted host)
       copy:
         dest: "{{ csv_file }}"
         content: |
           Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
           {% for i in data_list %}
-          {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+          {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},
+          {{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
           {% endfor %}
-
-    - name: Wait for reports to exist
-      wait_for:
-        path: "{{ csv_file }}"
-        timeout: 10
+      run_once: false
 
     - name: Ensure reports are readable
       file:
@@ -176,7 +178,7 @@
         recipient = "{{ mail_to }}"
         ts = "{{ timestamp }}"
         body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
-        subject = f"AWX Sysinfo Report - {ts}"
+        subject = f"AWX Sysinfo Report – {ts}"
 
         msg = MIMEMultipart()
         msg["From"] = sender
@@ -188,10 +190,11 @@
             path = os.path.expanduser(path)
             if os.path.exists(path):
                 with open(path, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
+                    part = MIMEBase("application","octet-stream")
                     part.set_payload(f.read())
                 encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
+                part.add_header("Content-Disposition",
+                                f"attachment; filename={os.path.basename(path)}")
                 msg.attach(part)
                 print(f"✅ Attached: {path}")
             else:
