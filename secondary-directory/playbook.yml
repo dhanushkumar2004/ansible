@@ -21,7 +21,7 @@
       changed_when: false
 
     ####################################################################
-    # 2️⃣ Ensure AppArmor is enabled in kernel (boot/runtime check)
+    # 2️⃣ Ensure AppArmor is enabled in kernel
     ####################################################################
     - name: Check if AppArmor is enabled in kernel
       command: cat /sys/module/apparmor/parameters/enabled
@@ -71,28 +71,27 @@
       changed_when: false
 
     ####################################################################
-    # 6️⃣ Summary Report
+    # 6️⃣ Summary Report (Clean & Left-Aligned)
     ####################################################################
     - name: Display AppArmor Configuration Summary
       debug:
         msg: |
-          ───────────────────────────────────────────────
-          🔒 **AppArmor Security Status Summary**
-          ───────────────────────────────────────────────
-          📦 Installed: {{ '✅ Yes' if apparmor_installed else '❌ No' }}
-          ⚙️ Kernel Enabled: {{ '✅ Yes' if apparmor_enabled_kernel else '❌ No' }}
-          🧩 All Profiles in Enforce/Complain: {{ '✅ Yes' if profiles_enforce_complain_ok else '❌ No' }}
-          🔐 All Profiles Enforcing: {{ '✅ Yes' if profiles_all_enforcing else '❌ No' }}
-          ───────────────────────────────────────────────
-          📊 Profile Statistics:
-              • Total Profiles: {{ total_profiles }}
-              • Enforce Mode:   {{ enforce_profiles }}
-              • Complain Mode:  {{ complain_profiles }}
-              • Disabled:       {{ disabled_profiles }}
-          ───────────────────────────────────────────────
-          ⚙️ Process Statistics:
-              • Processes w/ Profiles: {{ total_processes }}
-              • Enforce Mode:          {{ enforce_processes }}
-              • Complain Mode:         {{ complain_processes }}
-          ───────────────────────────────────────────────
-
+          ------------------------------------------------------------
+          AppArmor Security Status Summary
+          ------------------------------------------------------------
+          Installed:                         {{ 'Yes' if apparmor_installed else 'No' }}
+          Kernel Enabled:                    {{ 'Yes' if apparmor_enabled_kernel else 'No' }}
+          All Profiles in Enforce/Complain:  {{ 'Yes' if profiles_enforce_complain_ok else 'No' }}
+          All Profiles Enforcing:            {{ 'Yes' if profiles_all_enforcing else 'No' }}
+          ------------------------------------------------------------
+          Profile Statistics:
+              Total Profiles:       {{ total_profiles }}
+              Enforce Mode:         {{ enforce_profiles }}
+              Complain Mode:        {{ complain_profiles }}
+              Disabled:             {{ disabled_profiles }}
+          ------------------------------------------------------------
+          Process Statistics:
+              Processes w/ Profiles: {{ total_processes }}
+              Enforce Mode:          {{ enforce_processes }}
+              Complain Mode:         {{ complain_processes }}
+          ------------------------------------------------------------
