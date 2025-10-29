@@ -1,7 +1,7 @@
 ---
-# ==========================================================
-# MODULE 1 — Collect system info from all hosts
-# ==========================================================
+# AWX Sysinfo Collector — generate JSON + CSV on trusted host only (no email)
+
+# 1) Collect system info from all hosts (unchanged)
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -30,36 +30,34 @@
               - lsb-release
             state: present
             update_cache: yes
-            force_apt_get: yes
           environment:
             DEBIAN_FRONTEND: noninteractive
           when: >
             not (pkg_binaries.results
                  | selectattr('stat.exists','equalto',true)
                  | list | length == 3)
-
       rescue:
         - debug:
-            msg: "⚠️ Package installation failed or timed out; continuing."
+            msg: "⚠️ Package install failed; continuing with available tools."
 
     - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
-    - name: Get RAM slot usage and type
+    - name: Get RAM slot usage and memory type
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
         mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/,"",$2); if($2!="Unknown" && $2!="") {print $2; exit}}')
         [ -z "$mem_type" ] && mem_type="Unknown"
-        echo "$used_slots of $total_slots,$mem_type"
+        echo "$used_slots/$total_slots,$mem_type"
       register: ram_info
       changed_when: false
       args:
         executable: /bin/bash
 
-    - name: Get storage details
+    - name: Get storage devices and classify
       shell: |
         total=0
         out=""
@@ -85,7 +83,7 @@
           ram_slots: "{{ (ram_info.stdout.split(',')[0]) | default('N/A') }}"
           ram_type: "{{ (ram_info.stdout.split(',')[1]) | default('Unknown') }}"
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
-          drives: "{{ (disk_info.stdout.split(',',2)[1]) | default('N/A') }}"
+          drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
     - name: Display concise system summary
       debug:
@@ -98,115 +96,58 @@
           💽 Drives: {{ collected_sysinfo.drives }}
 
 
-# ==========================================================
-# MODULE 2 — Generate reports + send email (on trusted host)
-# ==========================================================
-- name: Generate and email reports from trusted host
+# 2) Aggregate and write reports on trusted host only (no emailing)
+- name: Generate JSON + CSV reports on trusted host (no email)
   hosts: 192.168.2.129
-  gather_facts: yes
-  become: false
+  gather_facts: yes                     # needed to resolve ansible_env.HOME correctly
+  become: false                         # run as the SSH user AWX connects with
   connection: ssh
+  run_once: true
 
   vars:
     report_dir: "{{ ansible_env.HOME }}/hosts-info-ansible"
-    timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
+    timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
-    smtp_host: "smtpout.secureserver.net"
-    smtp_port: 587
-    smtp_user: "{{ smtp_user }}"      # from AWX credential
-    smtp_pass: "{{ smtp_pass }}"      # from AWX credential
-    mail_to: "{{ smtp_user }}"
 
   tasks:
-    - name: Ensure report directory exists
+    - name: Ensure report directory exists (on trusted host)
       file:
         path: "{{ report_dir }}"
         state: directory
-        mode: "0755"
+        mode: '0755'
 
-    - name: Aggregate system data from all hosts
+    - name: Build aggregated data_list from collected facts
       set_fact:
-        data_list: "{{ hostvars | dict2items
-                       | map(attribute='value.collected_sysinfo')
-                       | select('defined') | list }}"
-      run_once: true
+        data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
 
     - name: Write JSON report (on trusted host)
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
-      run_once: false
+        mode: '0644'
 
-    - name: Write CSV report (on trusted host)
+    - name: Write CSV report (RAM slots as 'X of Y' to avoid date parsing)
       copy:
         dest: "{{ csv_file }}"
         content: |
-          Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
+          "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
           {% for i in data_list %}
-          {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},
-          {{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
+          "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots | regex_replace('([0-9]+)/([0-9]+)', '\\1 of \\2') }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
           {% endfor %}
-      run_once: false
+        mode: '0644'
 
     - name: Ensure reports are readable
       file:
         path: "{{ item }}"
-        mode: "0644"
+        mode: '0644'
       loop:
         - "{{ csv_file }}"
         - "{{ json_file }}"
 
-    - name: Display generated report paths
+    - name: Display created report locations (trusted host)
       debug:
         msg: |
-          ✅ Reports created successfully:
+          ✅ Reports written on {{ inventory_hostname }}:
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
-
-    - name: Send email with attachments
-      shell: |
-        python3 - <<'EOF'
-        import smtplib, ssl, os
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.base import MIMEBase
-        from email import encoders
-
-        sender = "{{ smtp_user }}"
-        password = "{{ smtp_pass }}"
-        recipient = "{{ mail_to }}"
-        ts = "{{ timestamp }}"
-        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
-        subject = f"AWX Sysinfo Report – {ts}"
-
-        msg = MIMEMultipart()
-        msg["From"] = sender
-        msg["To"] = recipient
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
-
-        for path in ["{{ csv_file }}", "{{ json_file }}"]:
-            path = os.path.expanduser(path)
-            if os.path.exists(path):
-                with open(path, "rb") as f:
-                    part = MIMEBase("application","octet-stream")
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition",
-                                f"attachment; filename={os.path.basename(path)}")
-                msg.attach(part)
-                print(f"✅ Attached: {path}")
-            else:
-                print(f"⚠️ Missing file: {path}")
-
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
-            server.starttls(context=ctx)
-            server.login(sender, password)
-            server.sendmail(sender, recipient, msg.as_string())
-        print(f"📧 Email sent successfully to {recipient}")
-        EOF
-      args:
-        executable: /bin/bash
-      run_once: true
