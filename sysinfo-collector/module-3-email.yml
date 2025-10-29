@@ -109,7 +109,7 @@
   connection: ssh
 
   vars:
-    report_dir: "{{ ansible_env.HOME }}/hosts-info-ansible"
+    report_dir: "~{{ ansible_user }}/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
@@ -209,3 +209,4 @@
       args:
         executable: /bin/bash
       run_once: true
+
