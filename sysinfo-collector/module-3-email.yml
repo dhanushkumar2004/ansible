@@ -1,8 +1,7 @@
 ---
 # ==========================================================
-# AWX Sysinfo Collector + Email (runs as SSH user)
+# MODULE 1 — Collect system info from all hosts
 # ==========================================================
-
 - name: Collect detailed system info from all hosts
   hosts: all
   gather_facts: yes
@@ -11,12 +10,9 @@
   become_method: sudo
 
   tasks:
-    ####################################################################
-    # --- REQUIRED TOOLS ----------------------------------------------
-    ####################################################################
-    - name: Ensure required packages are installed (robust and safe)
+    - name: Ensure required packages are installed
       block:
-        - name: Check if required binaries already exist
+        - name: Check if required binaries exist
           stat:
             path: "{{ item }}"
           register: pkg_binaries
@@ -26,7 +22,7 @@
             - /usr/bin/lsb_release
           changed_when: false
 
-        - name: Install missing tools
+        - name: Install missing tools quietly
           apt:
             name:
               - dmidecode
@@ -34,35 +30,34 @@
               - lsb-release
             state: present
             update_cache: yes
+            force_apt_get: yes
           environment:
             DEBIAN_FRONTEND: noninteractive
           when: >
-            not (pkg_binaries.results | selectattr('stat.exists','equalto',true) | list | length == 3)
+            not (pkg_binaries.results | selectattr('stat.exists', 'equalto', true) | list | length == 3)
+
       rescue:
         - debug:
-            msg: "⚠️ Package install failed; continuing with available tools."
+            msg: "⚠️ Package installation failed or timed out; continuing."
 
-    ####################################################################
-    # --- CPU, RAM, and Storage Collection -----------------------------
-    ####################################################################
     - name: Get CPU model
       shell: "lscpu | awk -F: '/Model name/ {print $2}' | sed 's/^ *//'"
       register: cpu_model
       changed_when: false
 
-    - name: Get RAM slot usage and memory type
+    - name: Get RAM slot usage and type
       shell: |
         total_slots=$(dmidecode -t memory | grep -E '^[[:space:]]*Memory Device' | wc -l)
         used_slots=$(dmidecode -t memory | grep -A5 'Memory Device' | grep -E 'Size: [1-9]' | wc -l)
         mem_type=$(dmidecode -t memory | awk -F: '/^[[:space:]]*Type:/{gsub(/^[ \t]+/, "", $2); if($2!="Unknown" && $2!="") {print $2; exit}}')
         [ -z "$mem_type" ] && mem_type="Unknown"
-        echo "$used_slots/$total_slots,$mem_type"
+        echo "$used_slots of $total_slots,$mem_type"
       register: ram_info
       changed_when: false
       args:
         executable: /bin/bash
 
-    - name: Get storage devices and classify
+    - name: Get storage details
       shell: |
         total=0
         out=""
@@ -79,7 +74,7 @@
       args:
         executable: /bin/bash
 
-    - name: Store system info
+    - name: Save structured sysinfo fact
       set_fact:
         collected_sysinfo:
           hostname: "{{ ansible_hostname }}"
@@ -90,7 +85,7 @@
           storage_gb: "{{ (disk_info.stdout.split(',')[0]) | default('0') }}"
           drives: "{{ (disk_info.stdout.split(',', 2)[1]) | default('N/A') }}"
 
-    - name: Display system summary
+    - name: Display concise system summary
       debug:
         msg: |
           🖥️ Hostname: {{ collected_sysinfo.hostname }}
@@ -100,70 +95,63 @@
           📦 Storage: {{ collected_sysinfo.storage_gb }} GB
           💽 Drives: {{ collected_sysinfo.drives }}
 
+
 # ==========================================================
-# MODULE 2 - Aggregate + Send Mail
+# MODULE 2 — Generate reports + send email (same SSH user)
 # ==========================================================
-# ==========================================================
-# MODULE 2 - Aggregate + Send Mail (verified attachments)
-# ==========================================================
-- name: Aggregate reports and email from trusted host (as SSH user)
+- name: Generate and email reports from trusted host
   hosts: 192.168.2.129
   gather_facts: no
-  become: false
-  run_once: true
+  become: false   # no privilege escalation, use SSH user directly
+  connection: ssh
 
   vars:
-    home_dir: "{{ lookup('env','HOME') }}"
-    report_dir: "{{ home_dir }}/hosts-info-ansible"
+    report_dir: "~/hosts-info-ansible"
     timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
     csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
     json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
     smtp_host: "smtpout.secureserver.net"
     smtp_port: 587
-    mail_from: "{{ smtp_user }}"
-    mail_to: "{{ smtp_user }}"
-    subject: "AWX Sysinfo Report - {{ timestamp }}"
+    smtp_user: "{{ email_username }}"    # AWX credential
+    smtp_pass: "{{ email_password }}"    # AWX credential
+    mail_to: "{{ email_username }}"      # send to same mailbox
 
   tasks:
     - name: Ensure report directory exists
       file:
         path: "{{ report_dir }}"
         state: directory
-        mode: '0755'
+        mode: "0755"
 
-    - name: Aggregate collected host data
+    - name: Aggregate system data from all hosts
       set_fact:
         data_list: "{{ hostvars | dict2items | map(attribute='value.collected_sysinfo') | select('defined') | list }}"
+      run_once: true
 
-    - name: Write JSON report on trusted host
+    - name: Write JSON report
       copy:
         dest: "{{ json_file }}"
         content: "{{ data_list | to_nice_json }}"
-        mode: '0644'
 
-    - name: Write CSV report on trusted host (2 of 4 fix)
+    - name: Write CSV report
       copy:
         dest: "{{ csv_file }}"
         content: |
-          "Hostname","CPU","RAM_MB","RAM_Slots","RAM_Type","Storage_GB","Drives"
+          Hostname,CPU,RAM_MB,RAM_Slots,RAM_Type,Storage_GB,Drives
           {% for i in data_list %}
-          "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots | regex_replace('([0-9]+)/([0-9]+)', '\\1 of \\2') }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
+          {{ i.hostname }},{{ i.cpu }},{{ i.ram_mb }},{{ i.ram_slots }},{{ i.ram_type }},{{ i.storage_gb }},{{ i.drives }}
           {% endfor %}
-        mode: '0644'
 
-    - name: Verify that reports exist and show details
+    - name: Display generated report paths
+      debug:
+        msg: |
+          ✅ Reports created:
+          CSV: {{ csv_file }}
+          JSON: {{ json_file }}
+
+    - name: Send email with attachments
       shell: |
-        echo "Verifying reports in {{ report_dir }}"
-        ls -lh {{ csv_file }} {{ json_file }} || echo "Files not found"
-      register: verify
-      changed_when: false
-
-    - debug:
-        var: verify.stdout_lines
-
-    - name: Send email with verified CSV + JSON attachments
-      shell: |
-        python3 - <<'PY'
+        python3 - <<'EOF'
         import smtplib, ssl, os
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
@@ -172,46 +160,33 @@
 
         sender = "{{ smtp_user }}"
         password = "{{ smtp_pass }}"
-        recipient = "{{ smtp_user }}"
+        recipient = "{{ mail_to }}"
         ts = "{{ timestamp }}"
-        csv_path = os.path.expanduser("{{ csv_file }}")
-        json_path = os.path.expanduser("{{ json_file }}")
-
-        print(f"📦 Preparing to attach:\n - {csv_path}\n - {json_path}")
+        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
+        subject = f"AWX Sysinfo Report - {ts}"
 
         msg = MIMEMultipart()
         msg["From"] = sender
         msg["To"] = recipient
-        msg["Subject"] = f"AWX Sysinfo Report - {ts}"
-        body = f"Attached are the latest system reports collected by AWX generated on {ts}.\n\nRegards,\nansible team"
+        msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
 
-        for path in [csv_path, json_path]:
-            if os.path.exists(path) and os.path.getsize(path) > 0:
+        for path in ["{{ csv_file }}", "{{ json_file }}"]:
+            if os.path.exists(path):
                 with open(path, "rb") as f:
                     part = MIMEBase("application", "octet-stream")
                     part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
-                    msg.attach(part)
-                    print(f"✅ Attached: {path}")
-            else:
-                print(f"⚠️ Missing or empty file: {path}")
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(path)}")
+                msg.attach(part)
 
         ctx = ssl.create_default_context()
         with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
             server.starttls(context=ctx)
             server.login(sender, password)
             server.sendmail(sender, recipient, msg.as_string())
-            print(f"📧 Email sent successfully to {recipient}")
-        PY
+        print(f"📧 Email sent successfully to {recipient}")
+        EOF
       args:
         executable: /bin/bash
-
-    - name: Final confirmation
-      debug:
-        msg: |
-          ✅ Email sent to {{ smtp_user }}
-          Files used:
-            - {{ csv_file }}
-            - {{ json_file }}
+      run_once: true
