@@ -150,8 +150,6 @@
             path: "{{ report_dir }}"
             state: directory
             mode: '0755'
-            owner: dhanushkumar.rb
-            group: dhanushkumar.rb
 
         - name: Aggregate data for report
           set_fact:
@@ -161,8 +159,6 @@
           copy:
             dest: "{{ json_file }}"
             content: "{{ data_list | to_nice_json }}"
-            owner: dhanushkumar.rb
-            group: dhanushkumar.rb
             mode: '0644'
 
         - name: Write CSV report
@@ -173,8 +169,6 @@
               {% for i in data_list %}
               "{{ i.hostname }}","{{ i.cpu }}","{{ i.ram_mb }}","{{ i.ram_slots }}","{{ i.ram_type }}","{{ i.storage_gb }}","{{ i.drives }}"
               {% endfor %}
-            owner: dhanushkumar.rb
-            group: dhanushkumar.rb
             mode: '0644'
 
         - name: Confirm reports exist before mailing
