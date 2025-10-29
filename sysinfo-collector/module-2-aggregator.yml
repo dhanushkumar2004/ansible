@@ -1,6 +1,6 @@
 ---
 # ==========================================================
-# Collect facts on all hosts (module 1) — unchanged
+# MODULE 1 - Collect system info from all hosts
 # ==========================================================
 - name: Collect detailed system info from all hosts
   hosts: all
@@ -34,7 +34,7 @@
             DEBIAN_FRONTEND: noninteractive
           when: >
             not (pkg_binaries.results
-                 | selectattr('stat.exists','equalto',true)
+                 | selectattr('stat.exists', 'equalto', true)
                  | list | length == 3)
       rescue:
         - debug:
@@ -97,7 +97,7 @@
 
 
 # ==========================================================
-# MODULE 2 - Aggregate & save reports on trusted host (as SSH user)
+# MODULE 2 - Aggregate & Save Reports on Trusted Host
 # ==========================================================
 - name: Aggregate and save reports on trusted host (as SSH user)
   hosts: all
@@ -107,24 +107,22 @@
   become: false
 
   vars:
-    # we'll compute remote_home below by running 'echo $HOME' on the trusted host
-    report_dir: "{{ remote_home }}/hosts-info-ansible"
     timestamp: "{{ lookup('pipe','date +%Y-%m-%d_%H-%M-%S') }}"
-    csv_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.csv"
-    json_file: "{{ report_dir }}/sysinfo_report_{{ timestamp }}.json"
 
   tasks:
-    - name: Determine SSH user's home on trusted host
-      # runs on 192.168.2.129 because of delegate_to at play level
+    - name: Determine SSH user's home directory on trusted host
       shell: "echo $HOME"
       register: remote_home_cmd
       changed_when: false
 
-    - name: Set remote_home fact
+    - name: Set report paths based on SSH user's home
       set_fact:
-        remote_home: "{{ remote_home_cmd.stdout | default('/home/ansible') }}"
+        remote_home: "{{ remote_home_cmd.stdout | trim }}"
+        report_dir: "{{ remote_home }}/hosts-info-ansible"
+        csv_file: "{{ remote_home }}/hosts-info-ansible/sysinfo_report_{{ timestamp }}.csv"
+        json_file: "{{ remote_home }}/hosts-info-ansible/sysinfo_report_{{ timestamp }}.json"
 
-    - name: Ensure report directory exists on trusted host (owned by SSH user)
+    - name: Ensure report directory exists
       file:
         path: "{{ report_dir }}"
         state: directory
@@ -140,7 +138,7 @@
         content: "{{ data_list | to_nice_json }}"
         mode: '0644'
 
-    - name: Write CSV report on trusted host (format RAM slots X of Y)
+    - name: Write CSV report on trusted host
       copy:
         dest: "{{ csv_file }}"
         content: |
@@ -150,17 +148,9 @@
           {% endfor %}
         mode: '0644'
 
-    - name: Ensure reports are readable (adjust perms, will keep owner = SSH user)
-      file:
-        path: "{{ item }}"
-        mode: '0644'
-      loop:
-        - "{{ csv_file }}"
-        - "{{ json_file }}"
-
-    - name: Final debug — show where files are saved (trusted host)
+    - name: Final confirmation
       debug:
         msg: |
-          ✅ Reports written on trusted host (as SSH user):
+          ✅ Reports saved on trusted host (as SSH user):
           CSV: {{ csv_file }}
           JSON: {{ json_file }}
