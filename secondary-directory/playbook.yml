@@ -1,5 +1,5 @@
 ---
-- name: Check AppArmor Configuration and Enforcement
+- name: Verify AppArmor Configuration and Enforcement (Read-Only Check)
   hosts: all
   become: true
   gather_facts: false
@@ -9,28 +9,19 @@
     ####################################################################
     # 1️⃣ Ensure AppArmor is installed
     ####################################################################
-    - name: Check if AppArmor package is installed
-      command: dpkg -l | grep -w apparmor
+    - name: Check if AppArmor is installed
+      command: dpkg -l apparmor
       register: apparmor_pkg
       ignore_errors: true
       changed_when: false
 
-    - name: Set installation status fact
+    - name: Report AppArmor installation status
       set_fact:
-        apparmor_installed: "{{ 'Yes' if apparmor_pkg.rc == 0 else 'No' }}"
-
-    - name: Report installation status
-      debug:
-        msg: >
-          {% if apparmor_installed == 'Yes' %}
-            ✅ AppArmor installation policy satisfied (package found)
-          {% else %}
-            ❌ AppArmor installation policy NOT satisfied (package missing)
-          {% endif %}
-
+        apparmor_installed: "{{ 'ii' in apparmor_pkg.stdout }}"
+      changed_when: false
 
     ####################################################################
-    # 2️⃣ Check if AppArmor is enabled in the kernel
+    # 2️⃣ Ensure AppArmor is enabled in kernel (boot/runtime check)
     ####################################################################
     - name: Check if AppArmor is enabled in kernel
       command: cat /sys/module/apparmor/parameters/enabled
@@ -38,77 +29,70 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Set kernel enablement fact
-      set_fact:
-        apparmor_enabled: "{{ 'Yes' if kernel_enabled.stdout.strip() == 'Y' else 'No' }}"
-
     - name: Report AppArmor kernel enablement status
-      debug:
-        msg: >
-          {% if apparmor_enabled == 'Yes' %}
-            ✅ AppArmor is enabled in the kernel (policy satisfied)
-          {% else %}
-            ❌ AppArmor is NOT enabled in the kernel (policy NOT satisfied)
-          {% endif %}
-
+      set_fact:
+        apparmor_enabled_kernel: "{{ kernel_enabled.stdout.strip() == 'Y' }}"
+      changed_when: false
 
     ####################################################################
-    # 3️⃣ Check AppArmor profile status (enforce, complain, disabled)
+    # 3️⃣ Gather AppArmor profile and process stats
     ####################################################################
-    - name: Check AppArmor profile status
+    - name: Run aa-status to gather details
       command: aa-status
       register: aa_status
       ignore_errors: true
       changed_when: false
 
-    - name: Extract profile counts
+    - name: Extract all key metrics from aa-status output
       set_fact:
-        total_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1')) | default('0') | int }}"
-        enforce_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1')) | default('0') | int }}"
-        complain_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in complain mode', '\\1')) | default('0') | int }}"
-        disabled_total: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are disabled', '\\1')) | default('0') | int }}"
-
-    - name: Report profiles enforce/complain mode
-      debug:
-        msg: >
-          {% if total_profiles > 0 and disabled_total == 0 %}
-            ✅ All AppArmor profiles are in enforce or complain mode (policy satisfied)
-          {% else %}
-            ❌ Some AppArmor profiles are disabled (policy NOT satisfied)
-          {% endif %}
-
+        total_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1') | default('0') | int }}"
+        enforce_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1') | default('0') | int }}"
+        complain_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in complain mode', '\\1') | default('0') | int }}"
+        disabled_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in kill mode', '\\1') | default('0') | int }}"
+        total_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes have profiles defined', '\\1') | default('0') | int }}"
+        enforce_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes are in enforce mode', '\\1') | default('0') | int }}"
+        complain_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes are in complain mode', '\\1') | default('0') | int }}"
+      changed_when: false
 
     ####################################################################
-    # 4️⃣ Ensure all AppArmor profiles are enforcing
+    # 4️⃣ Report AppArmor profile mode satisfaction
     ####################################################################
-    - name: Set enforcement status fact
+    - name: Report enforce/complain mode satisfaction
       set_fact:
-        all_enforcing: "{{ 'Yes' if (enforce_total == total_profiles and total_profiles > 0) else 'No' }}"
-
-    - name: Report enforcement status
-      debug:
-        msg: >
-          {% if all_enforcing == 'Yes' %}
-            ✅ All AppArmor profiles are enforcing (policy satisfied)
-          {% else %}
-            ❌ Not all AppArmor profiles are enforcing (policy NOT satisfied)
-          {% endif %}
-
+        profiles_enforce_complain_ok: "{{ total_profiles | int > 0 and disabled_profiles | int == 0 }}"
+      changed_when: false
 
     ####################################################################
-    # 5️⃣ Final Summary Report
+    # 5️⃣ Ensure all profiles are enforcing
     ####################################################################
-    - name: Display AppArmor Compliance Summary
+    - name: Report enforcing satisfaction
+      set_fact:
+        profiles_all_enforcing: "{{ enforce_profiles | int == total_profiles | int and total_profiles | int > 0 }}"
+      changed_when: false
+
+    ####################################################################
+    # 6️⃣ Summary Report
+    ####################################################################
+    - name: Display AppArmor Configuration Summary
       debug:
         msg: |
-          ================== AppArmor Compliance Summary ==================
-          AppArmor Installed:               {{ apparmor_installed }}
-          AppArmor Enabled in Kernel:       {{ apparmor_enabled }}
-          ------------------------------------------------------------------
-          Total Profiles Loaded:            {{ total_profiles }}
-          Profiles Enforcing:               {{ enforce_total }}
-          Profiles in Complain Mode:        {{ complain_total }}
-          Profiles Disabled:                {{ disabled_total }}
-          ------------------------------------------------------------------
-          All Profiles Enforcing:           {{ all_enforcing }}
-          ==================================================================
+          ───────────────────────────────────────────────
+          🔒 **AppArmor Security Status Summary**
+          ───────────────────────────────────────────────
+          📦 Installed: {{ '✅ Yes' if apparmor_installed else '❌ No' }}
+          ⚙️ Kernel Enabled: {{ '✅ Yes' if apparmor_enabled_kernel else '❌ No' }}
+          🧩 All Profiles in Enforce/Complain: {{ '✅ Yes' if profiles_enforce_complain_ok else '❌ No' }}
+          🔐 All Profiles Enforcing: {{ '✅ Yes' if profiles_all_enforcing else '❌ No' }}
+          ───────────────────────────────────────────────
+          📊 Profile Statistics:
+              • Total Profiles: {{ total_profiles }}
+              • Enforce Mode:   {{ enforce_profiles }}
+              • Complain Mode:  {{ complain_profiles }}
+              • Disabled:       {{ disabled_profiles }}
+          ───────────────────────────────────────────────
+          ⚙️ Process Statistics:
+              • Processes w/ Profiles: {{ total_processes }}
+              • Enforce Mode:          {{ enforce_processes }}
+              • Complain Mode:         {{ complain_processes }}
+          ───────────────────────────────────────────────
+
