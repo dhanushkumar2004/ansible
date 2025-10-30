@@ -98,9 +98,7 @@
     
           AppArmor Compliance Report
 
-          Ensure AppArmor is installed:                     {{ apparmor_summary['Ensure AppArmor is installed'] }}
-          Ensure AppArmor is enabled in the bootloader:     {{ apparmor_summary['Ensure AppArmor is enabled in the bootloader configuration'] }}
-          Ensure all Profiles are in enforce/complain mode: {{ apparmor_summary['Ensure all AppArmor Profiles are in enforce or complain mode'] }}
-          Ensure all Profiles are enforcing:                {{ apparmor_summary['Ensure all AppArmor Profiles are enforcing'] }}
+          Ensure AppArmor is installed: {{ apparmor_summary['Ensure AppArmor is installed'] }}          Ensure AppArmor is enabled in the bootloader: {{ apparmor_summary['Ensure AppArmor is enabled in the bootloader configuration'] }}
+          Ensure all Profiles are in enforce/complain mode: {{ apparmor_summary['Ensure all AppArmor Profiles are in enforce or complain mode'] }}          Ensure all Profiles are enforcing: {{ apparmor_summary['Ensure all AppArmor Profiles are enforcing'] }}
           ------------------------------------------------------------
           Report saved to: {{ report_file }}
