@@ -5,12 +5,12 @@
   gather_facts: true
 
   vars:
-    report_dir: "{{ ansible_env.HOME }}/CIS-linux-hardening"
+    user_home: "{{ ansible_env.HOME }}"
+    report_dir: "{{ user_home }}/Documents/ansible/CIS-linux-hardening"
     timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
     report_file: "{{ report_dir }}/apparmor_status_{{ timestamp }}.json"
 
   tasks:
-
     #####################################################################
     # 1️⃣ Ensure AppArmor is installed
     #####################################################################
@@ -64,18 +64,20 @@
           "Ensure all AppArmor Profiles are enforcing": "{{ 'Yes' if apparmor_all_enforcing else 'No (Action Required)' }}"
 
     #####################################################################
-    # 6️⃣ Ensure destination folder exists on remote host
+    # 6️⃣ Create directory for reports (as regular SSH user)
     #####################################################################
-    - name: Create directory for CIS Linux Hardening reports
+    - name: Create directory for AppArmor reports under user's Documents
+      become: false
       file:
         path: "{{ report_dir }}"
         state: directory
         mode: '0755'
 
     #####################################################################
-    # 7️⃣ Save JSON report to remote host
+    # 7️⃣ Save JSON report (as SSH user, not root)
     #####################################################################
     - name: Save AppArmor compliance report as JSON
+      become: false
       copy:
         dest: "{{ report_file }}"
         content: "{{ apparmor_summary | to_nice_json }}"
@@ -96,7 +98,3 @@
           Ensure all Profiles are enforcing:                {{ apparmor_summary['Ensure all AppArmor Profiles are enforcing'] }}
           ------------------------------------------------------------
           Report saved to: {{ report_file }}
-
-
-
-
