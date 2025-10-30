@@ -1,97 +1,92 @@
 ---
-- name: Verify AppArmor Configuration and Enforcement (Read-Only Check)
+- name: AppArmor Compliance Check
   hosts: all
   become: true
   gather_facts: false
 
-  tasks:
+  vars:
+    timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+    output_file: "/home/{{ ansible_user }}/CIS-linux-hardening/apparmor_check_{{ timestamp }}.json"
 
-    ####################################################################
-    # 1️⃣ Ensure AppArmor is installed
-    ####################################################################
-    - name: Check if AppArmor is installed
-      command: dpkg -l apparmor
+  tasks:
+    ############################################################
+    # 1️⃣ Check if AppArmor is installed
+    ############################################################
+    - name: Check if AppArmor package is installed
+      command: dpkg -s apparmor
       register: apparmor_pkg
       ignore_errors: true
       changed_when: false
 
-    - name: Report AppArmor installation status
-      set_fact:
-        apparmor_installed: "{{ 'ii' in apparmor_pkg.stdout }}"
-      changed_when: false
+    - set_fact:
+        apparmor_installed: "{{ apparmor_pkg.rc == 0 }}"
 
-    ####################################################################
-    # 2️⃣ Ensure AppArmor is enabled in kernel
-    ####################################################################
+    ############################################################
+    # 2️⃣ Check if AppArmor is enabled in kernel (bootloader)
+    ############################################################
     - name: Check if AppArmor is enabled in kernel
       command: cat /sys/module/apparmor/parameters/enabled
-      register: kernel_enabled
+      register: apparmor_kernel
       ignore_errors: true
       changed_when: false
 
-    - name: Report AppArmor kernel enablement status
-      set_fact:
-        apparmor_enabled_kernel: "{{ kernel_enabled.stdout.strip() == 'Y' }}"
-      changed_when: false
+    - set_fact:
+        apparmor_enabled_kernel: "{{ apparmor_kernel.stdout.strip() == 'Y' }}"
 
-    ####################################################################
-    # 3️⃣ Gather AppArmor profile and process stats
-    ####################################################################
-    - name: Run aa-status to gather details
+    ############################################################
+    # 3️⃣ Check AppArmor profile status
+    ############################################################
+    - name: Get AppArmor profile status
       command: aa-status
       register: aa_status
       ignore_errors: true
       changed_when: false
 
-    - name: Extract all key metrics from aa-status output
-      set_fact:
-        total_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1') | default('0') | int }}"
-        enforce_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1') | default('0') | int }}"
-        complain_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in complain mode', '\\1') | default('0') | int }}"
-        disabled_profiles: "{{ aa_status.stdout | regex_search('([0-9]+) profiles are in kill mode', '\\1') | default('0') | int }}"
-        total_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes have profiles defined', '\\1') | default('0') | int }}"
-        enforce_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes are in enforce mode', '\\1') | default('0') | int }}"
-        complain_processes: "{{ aa_status.stdout | regex_search('([0-9]+) processes are in complain mode', '\\1') | default('0') | int }}"
-      changed_when: false
+    - set_fact:
+        total_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are loaded', '\\1')) | default('0') | int }}"
+        enforce_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in enforce mode', '\\1')) | default('0') | int }}"
+        complain_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are in complain mode', '\\1')) | default('0') | int }}"
+        disabled_profiles: "{{ (aa_status.stdout | regex_search('([0-9]+) profiles are disabled', '\\1')) | default('0') | int }}"
 
-    ####################################################################
-    # 4️⃣ Report AppArmor profile mode satisfaction
-    ####################################################################
-    - name: Report enforce/complain mode satisfaction
-      set_fact:
-        profiles_enforce_complain_ok: "{{ total_profiles | int > 0 and disabled_profiles | int == 0 }}"
-      changed_when: false
+    - set_fact:
+        profiles_enforce_complain_ok: "{{ total_profiles > 0 and disabled_profiles == 0 }}"
+        profiles_all_enforcing: "{{ total_profiles > 0 and enforce_profiles == total_profiles }}"
 
-    ####################################################################
-    # 5️⃣ Ensure all profiles are enforcing
-    ####################################################################
-    - name: Report enforcing satisfaction
-      set_fact:
-        profiles_all_enforcing: "{{ enforce_profiles | int == total_profiles | int and total_profiles | int > 0 }}"
-      changed_when: false
-
-    ####################################################################
-    # 6️⃣ Summary Report (Clean & Left-Aligned)
-    ####################################################################
-    - name: Display AppArmor Configuration Summary
+    ############################################################
+    # 4️⃣ Generate readable summary
+    ############################################################
+    - name: Display AppArmor Compliance Results
       debug:
         msg: |
-          ------------------------------------------------------------
-          AppArmor Security Status Summary
-          ------------------------------------------------------------
-          Installed:                         {{ 'Yes' if apparmor_installed else 'No' }}
-          Kernel Enabled:                    {{ 'Yes' if apparmor_enabled_kernel else 'No' }}
-          All Profiles in Enforce/Complain:  {{ 'Yes' if profiles_enforce_complain_ok else 'No' }}
-          All Profiles Enforcing:            {{ 'Yes' if profiles_all_enforcing else 'No' }}
-          ------------------------------------------------------------
-          Profile Statistics:
-              Total Profiles:       {{ total_profiles }}
-              Enforce Mode:         {{ enforce_profiles }}
-              Complain Mode:        {{ complain_profiles }}
-              Disabled:             {{ disabled_profiles }}
-          ------------------------------------------------------------
-          Process Statistics:
-              Processes w/ Profiles: {{ total_processes }}
-              Enforce Mode:          {{ enforce_processes }}
-              Complain Mode:         {{ complain_processes }}
-          ------------------------------------------------------------
+          Ensure AppArmor is installed - {{ 'Yes' if apparmor_installed else 'No (Action required)' }}
+          Ensure AppArmor is enabled in the bootloader configuration - {{ 'Yes' if apparmor_enabled_kernel else 'No (Action required)' }}
+          Ensure all AppArmor Profiles are in enforce or complain mode - {{ 'Yes' if profiles_enforce_complain_ok else 'No (Action required)' }}
+          Ensure all AppArmor Profiles are enforcing - {{ 'Yes' if profiles_all_enforcing else 'No (Action required)' }}
+
+    ############################################################
+    # 5️⃣ Export results to JSON file on remote machine
+    ############################################################
+    - name: Create CIS-linux-hardening directory if not exists
+      file:
+        path: "/home/{{ ansible_user }}/CIS-linux-hardening"
+        state: directory
+        mode: '0755'
+
+    - name: Write AppArmor compliance results to JSON
+      copy:
+        dest: "{{ output_file }}"
+        content: |
+          {
+            "timestamp": "{{ timestamp }}",
+            "Ensure AppArmor is installed": "{{ 'Yes' if apparmor_installed else 'No (Action required)' }}",
+            "Ensure AppArmor is enabled in the bootloader configuration": "{{ 'Yes' if apparmor_enabled_kernel else 'No (Action required)' }}",
+            "Ensure all AppArmor Profiles are in enforce or complain mode": "{{ 'Yes' if profiles_enforce_complain_ok else 'No (Action required)' }}",
+            "Ensure all AppArmor Profiles are enforcing": "{{ 'Yes' if profiles_all_enforcing else 'No (Action required)' }}",
+            "Profile Statistics": {
+              "Total Profiles": {{ total_profiles }},
+              "Enforce Mode": {{ enforce_profiles }},
+              "Complain Mode": {{ complain_profiles }},
+              "Disabled": {{ disabled_profiles }}
+            }
+          }
+      mode: '0644'
